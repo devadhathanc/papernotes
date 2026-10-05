@@ -6,6 +6,44 @@ const STORAGE_KEY_NOTES = '@papernotes_documents_v1';
 const STORAGE_KEY_ACTIVE = '@papernotes_active_id_v1';
 const STORAGE_KEY_CLOUD = '@papernotes_cloud_config_v1';
 
+// In-memory fallback if AsyncStorage native module is unavailable
+const memoryCache = new Map<string, string>();
+
+async function safeGetItem(key: string): Promise<string | null> {
+  try {
+    if (AsyncStorage && typeof AsyncStorage.getItem === 'function') {
+      const val = await AsyncStorage.getItem(key);
+      if (val !== null) return val;
+    }
+  } catch (e) {
+    // Native module unavailable or error
+  }
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const val = window.localStorage.getItem(key);
+      if (val !== null) return val;
+    } catch {}
+  }
+  return memoryCache.get(key) || null;
+}
+
+async function safeSetItem(key: string, value: string): Promise<void> {
+  memoryCache.set(key, value);
+  try {
+    if (AsyncStorage && typeof AsyncStorage.setItem === 'function') {
+      await AsyncStorage.setItem(key, value);
+      return;
+    }
+  } catch (e) {
+    // Native module unavailable
+  }
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {}
+  }
+}
+
 export const MOBILE_STARTER_NOTES: Note[] = [
   {
     id: 'welcome-mobile',
@@ -83,7 +121,7 @@ export const MOBILE_STARTER_NOTES: Note[] = [
 export class AsyncStorageAdapter {
   async loadNotes(): Promise<Note[]> {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY_NOTES);
+      const raw = await safeGetItem(STORAGE_KEY_NOTES);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -93,22 +131,22 @@ export class AsyncStorageAdapter {
       await this.saveNotes(MOBILE_STARTER_NOTES);
       return MOBILE_STARTER_NOTES;
     } catch (e) {
-      console.error('AsyncStorageAdapter: failed to load notes', e);
+      console.warn('AsyncStorageAdapter: fallback to starter notes', e);
       return MOBILE_STARTER_NOTES;
     }
   }
 
   async saveNotes(notes: Note[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(notes));
+      await safeSetItem(STORAGE_KEY_NOTES, JSON.stringify(notes));
     } catch (e) {
-      console.error('AsyncStorageAdapter: failed to save notes', e);
+      console.warn('AsyncStorageAdapter: failed to save notes', e);
     }
   }
 
   async getActiveNoteId(): Promise<string | null> {
     try {
-      return await AsyncStorage.getItem(STORAGE_KEY_ACTIVE);
+      return await safeGetItem(STORAGE_KEY_ACTIVE);
     } catch {
       return null;
     }
@@ -116,15 +154,15 @@ export class AsyncStorageAdapter {
 
   async setActiveNoteId(id: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(STORAGE_KEY_ACTIVE, id);
+      await safeSetItem(STORAGE_KEY_ACTIVE, id);
     } catch (e) {
-      console.error('AsyncStorageAdapter: failed to set active note id', e);
+      console.warn('AsyncStorageAdapter: failed to set active note id', e);
     }
   }
 
   async getCloudConfig(): Promise<CloudConfig | null> {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY_CLOUD);
+      const raw = await safeGetItem(STORAGE_KEY_CLOUD);
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -133,9 +171,9 @@ export class AsyncStorageAdapter {
 
   async saveCloudConfig(config: CloudConfig): Promise<void> {
     try {
-      await AsyncStorage.setItem(STORAGE_KEY_CLOUD, JSON.stringify(config));
+      await safeSetItem(STORAGE_KEY_CLOUD, JSON.stringify(config));
     } catch (e) {
-      console.error('AsyncStorageAdapter: failed to save cloud config', e);
+      console.warn('AsyncStorageAdapter: failed to save cloud config', e);
     }
   }
 }

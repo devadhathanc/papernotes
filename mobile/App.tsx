@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   TextInput,
@@ -11,6 +10,7 @@ import {
   StatusBar,
   Alert
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Note, Block, BlockType, CoverStyle } from './src/domain/Note';
 import type { SyncState, CloudConfig, SyncStats } from './src/domain/Sync';
 import { AsyncStorageAdapter } from './src/services/storage/AsyncStorageAdapter';
@@ -263,8 +263,9 @@ export default function App() {
   });
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.bgApp }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+    <SafeAreaProvider>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.bgApp }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
       {/* Header */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
@@ -555,7 +556,8 @@ export default function App() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
