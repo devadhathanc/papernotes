@@ -8,9 +8,14 @@ import {
   Modal,
   StyleSheet,
   StatusBar,
-  Alert
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableWithoutFeedback,
+  Keyboard
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { Feather } from '@expo/vector-icons';
 import type { Note, Block, BlockType, CoverStyle } from './src/domain/Note';
 import type { SyncState, CloudConfig, SyncStats } from './src/domain/Sync';
 import { AsyncStorageAdapter } from './src/services/storage/AsyncStorageAdapter';
@@ -23,6 +28,26 @@ function generateId(prefix = 'b'): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
 }
 
+const COVER_PATTERNS: { id: CoverStyle; label: string }[] = [
+  { id: 'charcoal-mesh', label: 'Mesh' },
+  { id: 'mono-grid', label: 'Grid' },
+  { id: 'slate-gradient', label: 'Gradient' },
+  { id: 'minimal-dots', label: 'Dots' }
+];
+
+const AVAILABLE_PAGE_ICONS = [
+  'zap',
+  'file-text',
+  'book-open',
+  'star',
+  'bookmark',
+  'target',
+  'hash',
+  'code',
+  'check-circle',
+  'compass'
+] as const;
+
 export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
@@ -30,10 +55,16 @@ export default function App() {
   const [syncState, setSyncState] = useState<SyncState>('local-only');
   const [syncStats, setSyncStats] = useState<SyncStats>(syncManager.getStats());
 
+  // Interactive Block States
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [blockMenuBlockId, setBlockMenuBlockId] = useState<string | null>(null);
+  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
+
   // Modals
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSlashOpen, setIsSlashOpen] = useState(false);
   const [isCloudOpen, setIsCloudOpen] = useState(false);
+  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Cloud credentials form
@@ -89,6 +120,7 @@ export default function App() {
 
   const selectNote = (id: string) => {
     setActiveNoteId(id);
+    setSelectedBlockId(null);
     storage.setActiveNoteId(id);
     setIsDrawerOpen(false);
   };
@@ -98,7 +130,7 @@ export default function App() {
       id: generateId('note'),
       title: '',
       icon: 'file-text',
-      hasCover: false,
+      hasCover: true,
       coverStyle: 'charcoal-mesh',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -132,8 +164,16 @@ export default function App() {
   const updateTitle = (text: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? { ...n, title: text, updatedAt: now } : n);
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, title: text, updatedAt: now } : n));
     persistNotes(next);
+  };
+
+  const updateNoteIcon = (iconName: string) => {
+    if (!activeNoteId) return;
+    const now = new Date().toISOString();
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, icon: iconName, updatedAt: now } : n));
+    persistNotes(next);
+    setIsIconPickerOpen(false);
   };
 
   const updateBlockContent = (blockId: string, content: string) => {
@@ -141,7 +181,7 @@ export default function App() {
     const now = new Date().toISOString();
     const next = notes.map(n => {
       if (n.id !== activeNoteId) return n;
-      const blocks = n.blocks.map(b => b.id === blockId ? { ...b, content, updatedAt: now } : b);
+      const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, content, updatedAt: now } : b));
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
@@ -152,13 +192,13 @@ export default function App() {
     const now = new Date().toISOString();
     const next = notes.map(n => {
       if (n.id !== activeNoteId) return n;
-      const blocks = n.blocks.map(b => b.id === blockId ? { ...b, checked: !b.checked, updatedAt: now } : b);
+      const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, checked: !b.checked, updatedAt: now } : b));
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
   };
 
-  // Reorder Pan function (Move Up / Down)
+  // Move block up or down
   const moveBlock = (index: number, direction: 'up' | 'down') => {
     if (!activeNote) return;
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -170,28 +210,78 @@ export default function App() {
       const blocks = [...n.blocks];
       const [moved] = blocks.splice(index, 1);
       blocks.splice(targetIndex, 0, moved);
-      blocks.forEach((b, i) => b.order = i);
+      blocks.forEach((b, i) => (b.order = i));
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
   };
 
-  const addBlock = (type: BlockType = 'paragraph') => {
-    if (!activeNoteId) return;
+  // Add block (either at bottom or below selected block)
+  const addBlockBelow = (targetBlockId?: string | null, type: BlockType = 'paragraph') => {
+    if (!activeNote || !activeNoteId) return;
     const now = new Date().toISOString();
     const newBlock: Block = {
       id: generateId('b'),
       type,
       content: '',
-      order: activeNote ? activeNote.blocks.length : 0,
+      order: 0,
       updatedAt: now
     };
+
+    let updatedBlocks: Block[] = [];
+    if (targetBlockId) {
+      const idx = activeNote.blocks.findIndex(b => b.id === targetBlockId);
+      if (idx !== -1) {
+        updatedBlocks = [...activeNote.blocks];
+        updatedBlocks.splice(idx + 1, 0, newBlock);
+      } else {
+        updatedBlocks = [...activeNote.blocks, newBlock];
+      }
+    } else {
+      updatedBlocks = [...activeNote.blocks, newBlock];
+    }
+
+    updatedBlocks.forEach((b, i) => (b.order = i));
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
+    persistNotes(next);
+    setSelectedBlockId(newBlock.id);
+    setIsSlashOpen(false);
+  };
+
+  const duplicateBlock = (blockId: string) => {
+    if (!activeNote || !activeNoteId) return;
+    const idx = activeNote.blocks.findIndex(b => b.id === blockId);
+    if (idx === -1) return;
+
+    const target = activeNote.blocks[idx];
+    const now = new Date().toISOString();
+    const duplicated: Block = {
+      ...target,
+      id: generateId('b'),
+      content: target.content,
+      updatedAt: now
+    };
+
+    const updatedBlocks = [...activeNote.blocks];
+    updatedBlocks.splice(idx + 1, 0, duplicated);
+    updatedBlocks.forEach((b, i) => (b.order = i));
+
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
+    persistNotes(next);
+    setSelectedBlockId(duplicated.id);
+    setBlockMenuBlockId(null);
+  };
+
+  const convertBlockType = (blockId: string, type: BlockType) => {
+    if (!activeNoteId) return;
+    const now = new Date().toISOString();
     const next = notes.map(n => {
       if (n.id !== activeNoteId) return n;
-      return { ...n, blocks: [...n.blocks, newBlock], updatedAt: now };
+      const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, type, updatedAt: now } : b));
+      return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
-    setIsSlashOpen(false);
+    setBlockMenuBlockId(null);
   };
 
   const deleteBlock = (blockId: string) => {
@@ -200,27 +290,29 @@ export default function App() {
     const next = notes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.filter(b => b.id !== blockId);
-      blocks.forEach((b, i) => b.order = i);
+      blocks.forEach((b, i) => (b.order = i));
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
+    if (selectedBlockId === blockId) {
+      setSelectedBlockId(null);
+    }
+    setBlockMenuBlockId(null);
   };
 
-  const toggleCover = () => {
-    if (!activeNoteId) return;
-    const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? {
-      ...n,
-      hasCover: !n.hasCover,
-      updatedAt: now
-    } : n);
-    persistNotes(next);
+  // Functional Palette: Cycle cover pattern (Mesh -> Grid -> Gradient -> Dots)
+  const cycleCoverPattern = () => {
+    if (!activeNote || !activeNoteId) return;
+    const current = activeNote.coverStyle || 'charcoal-mesh';
+    const currentIndex = COVER_PATTERNS.findIndex(p => p.id === current);
+    const nextIndex = (currentIndex + 1) % COVER_PATTERNS.length;
+    changeCoverStyle(COVER_PATTERNS[nextIndex].id);
   };
 
   const changeCoverStyle = (style: CoverStyle) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? { ...n, coverStyle: style, updatedAt: now } : n);
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, coverStyle: style, updatedAt: now } : n));
     persistNotes(next);
   };
 
@@ -236,25 +328,31 @@ export default function App() {
     if (success) {
       const synced = await syncManager.sync();
       setNotes(synced);
-      Alert.alert('Success', 'Connected to Supabase PostgreSQL and synced!');
+      Alert.alert('Connected', 'Synced seamlessly with Supabase PostgreSQL!');
       setIsCloudOpen(false);
     } else {
-      Alert.alert('Error', 'Connection failed. Please check your credentials & table setup.');
+      Alert.alert('Connection Failed', 'Please verify your Supabase project URL and anon public key.');
     }
     setIsTestingCloud(false);
   };
 
+  // Theme palettes
   const isDark = theme === 'dark';
   const colors = {
-    bgApp: isDark ? '#09090b' : '#ffffff',
-    bgCard: isDark ? '#141417' : '#f4f4f5',
-    bgSubtle: isDark ? '#1c1c21' : '#eaecee',
-    textMain: isDark ? '#f4f4f5' : '#09090b',
+    bgApp: isDark ? '#0c0c0e' : '#fcfcfc',
+    bgCard: isDark ? '#141417' : '#ffffff',
+    bgSubtle: isDark ? '#1b1b20' : '#f4f4f5',
+    bgHover: isDark ? '#23232a' : '#e4e4e7',
+    textMain: isDark ? '#f4f4f6' : '#111113',
     textSecondary: isDark ? '#a1a1aa' : '#52525b',
     textMuted: isDark ? '#71717a' : '#9ca3af',
-    border: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-    contrast: isDark ? '#ffffff' : '#09090b',
-    contrastInv: isDark ? '#000000' : '#ffffff'
+    border: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+    contrast: isDark ? '#ffffff' : '#111113',
+    contrastInv: isDark ? '#000000' : '#ffffff',
+    coverMesh: isDark ? '#18181b' : '#e4e4e7',
+    coverGrid: isDark ? '#121214' : '#fafafa',
+    coverGradient: isDark ? '#1c1c22' : '#f0f0f2',
+    coverDots: isDark ? '#101012' : '#f9f9fb'
   };
 
   const filteredNotes = notes.filter(n => {
@@ -262,300 +360,673 @@ export default function App() {
     return (n.title || '').toLowerCase().includes(searchQuery.toLowerCase());
   });
 
+  const activeBlockIndex = activeNote?.blocks.findIndex(b => b.id === (blockMenuBlockId || selectedBlockId)) ?? -1;
+
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={[styles.container, { backgroundColor: colors.bgApp }]}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.bgApp }]} edges={['top', 'left', 'right']}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-      {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <View style={styles.headerLeft}>
-          <TouchableOpacity
-            style={[styles.iconBtn, { backgroundColor: colors.bgCard }]}
-            onPress={() => setIsDrawerOpen(true)}
-          >
-            <Text style={[styles.iconText, { color: colors.textMain }]}>☰</Text>
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.textMain }]} numberOfLines={1}>
-            {activeNote?.title.trim() || 'Untitled Note'}
-          </Text>
+        {/* Top Header Bar */}
+        <View style={[styles.header, { borderBottomColor: colors.border }]}>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              style={[styles.iconBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+              onPress={() => setIsDrawerOpen(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Feather name="menu" size={17} color={colors.textMain} />
+            </TouchableOpacity>
+
+            <View style={styles.breadcrumbCluster}>
+              <Text style={[styles.breadcrumbRoot, { color: colors.textMuted }]}>PaperNotes</Text>
+              <Text style={[styles.breadcrumbDivider, { color: colors.textMuted }]}>/</Text>
+              <Text style={[styles.breadcrumbTitle, { color: colors.textMain }]} numberOfLines={1}>
+                {activeNote?.title.trim() || 'Untitled Note'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.headerRight}>
+            {/* Cloud Sync Status Button */}
+            <TouchableOpacity
+              style={[styles.iconBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+              onPress={() => setIsCloudOpen(true)}
+            >
+              <Feather
+                name="cloud"
+                size={16}
+                color={syncState === 'synced' ? '#22c55e' : colors.textSecondary}
+              />
+            </TouchableOpacity>
+
+            {/* Icon-Only Theme Toggle */}
+            <TouchableOpacity
+              style={[styles.iconBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+              onPress={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+            >
+              <Feather name={isDark ? 'sun' : 'moon'} size={15} color={colors.textMain} />
+            </TouchableOpacity>
+
+            {/* New Page CTA */}
+            <TouchableOpacity
+              style={[styles.iconBtn, { backgroundColor: colors.contrast, borderColor: colors.contrast }]}
+              onPress={createNote}
+            >
+              <Feather name="plus" size={17} color={colors.contrastInv} />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <View style={styles.headerRight}>
-          {/* Cloud Sync Status */}
-          <TouchableOpacity
-            style={[styles.iconBtn, { backgroundColor: colors.bgCard }]}
-            onPress={() => setIsCloudOpen(true)}
-          >
-            <Text style={{ fontSize: 13, color: syncState === 'synced' ? '#22c55e' : colors.textSecondary }}>
-              {syncState === 'synced' ? '☁✓' : '☁'}
-            </Text>
-          </TouchableOpacity>
+        {/* Main Document Scroll View */}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
+        >
+          {activeNote ? (
+            <TouchableWithoutFeedback onPress={() => setSelectedBlockId(null)}>
+              <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+              >
+                {/* Flexible Cover Banner with Title INSIDE Cover */}
+                <View
+                  style={[
+                    styles.coverBanner,
+                    activeNote.coverStyle === 'mono-grid'
+                      ? { backgroundColor: colors.coverGrid, borderColor: colors.border }
+                      : activeNote.coverStyle === 'slate-gradient'
+                      ? { backgroundColor: colors.coverGradient, borderColor: colors.border }
+                      : activeNote.coverStyle === 'minimal-dots'
+                      ? { backgroundColor: colors.coverDots, borderColor: colors.border }
+                      : { backgroundColor: colors.coverMesh, borderColor: colors.border }
+                  ]}
+                >
+                  {/* Top-Right Cover Action Bar: Functional Palette Button + Pills */}
+                  <View style={styles.coverTopBar}>
+                    <View style={styles.coverPillsRow}>
+                      <TouchableOpacity
+                        style={styles.coverPaletteBtn}
+                        onPress={cycleCoverPattern}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Feather name="sliders" size={13} color="#ffffff" />
+                      </TouchableOpacity>
 
-          {/* Theme toggle: Icon only */}
-          <TouchableOpacity
-            style={[styles.iconBtn, { backgroundColor: colors.bgCard }]}
-            onPress={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
-          >
-            <Text style={{ fontSize: 14, color: colors.textMain }}>{isDark ? '☀' : '☾'}</Text>
-          </TouchableOpacity>
+                      {COVER_PATTERNS.map(p => (
+                        <TouchableOpacity
+                          key={p.id}
+                          onPress={() => changeCoverStyle(p.id)}
+                          style={[
+                            styles.coverPill,
+                            (activeNote.coverStyle || 'charcoal-mesh') === p.id && styles.coverPillActive
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.coverPillText,
+                              (activeNote.coverStyle || 'charcoal-mesh') === p.id && styles.coverPillTextActive
+                            ]}
+                          >
+                            {p.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
 
-          {/* New Page */}
-          <TouchableOpacity
-            style={[styles.iconBtn, { backgroundColor: colors.contrast }]}
-            onPress={createNote}
-          >
-            <Text style={{ fontSize: 16, color: colors.contrastInv, fontWeight: 'bold' }}>+</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+                  {/* Page Title Directly On Cover (Same size 32px & bold, flexible height) */}
+                  <View style={styles.coverTitleWrapper}>
+                    <TextInput
+                      style={styles.coverTitleInput}
+                      value={activeNote.title}
+                      onChangeText={updateTitle}
+                      placeholder="Untitled Note"
+                      placeholderTextColor="rgba(255, 255, 255, 0.45)"
+                      multiline
+                      scrollEnabled={false}
+                    />
+                  </View>
+                </View>
 
-      {/* Document Viewport */}
-      {activeNote ? (
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-          {/* Cover Banner */}
-          {activeNote.hasCover && (
-            <View style={[styles.coverBanner, { backgroundColor: colors.bgCard }]}>
-              <View style={styles.coverControls}>
-                <TouchableOpacity onPress={() => changeCoverStyle('charcoal-mesh')} style={styles.coverStyleBtn}>
-                  <Text style={styles.coverStyleText}>Mesh</Text>
+                {/* Sub-Cover Actions: Change Icon only (No duplicate title below) */}
+                <View style={styles.pageMetaRow}>
+                  <TouchableOpacity
+                    style={[styles.changeIconPill, { backgroundColor: colors.bgSubtle, borderColor: colors.border }]}
+                    onPress={() => setIsIconPickerOpen(true)}
+                  >
+                    <Feather name={(activeNote.icon as any) || 'file-text'} size={14} color={colors.textMain} />
+                    <Text style={[styles.changeIconText, { color: colors.textSecondary }]}>Change icon</Text>
+                  </TouchableOpacity>
+
+                  <Text style={[styles.readingMetaText, { color: colors.textMuted }]}>
+                    {activeNote.blocks.length} blocks
+                  </Text>
+                </View>
+
+                {/* Blocks Canvas */}
+                <View style={styles.blocksCanvas}>
+                  {activeNote.blocks.map((block, idx) => {
+                    const isSelected = selectedBlockId === block.id;
+
+                    return (
+                      <View key={block.id} style={styles.blockWrapper}>
+                        {/* Overlay Toolbar pinned to Top-Left on clicking the component */}
+                        {isSelected && (
+                          <View style={[styles.blockOverlayToolbar, { backgroundColor: colors.contrast }]}>
+                            {/* '+' Button: Add block below */}
+                            <TouchableOpacity
+                              style={styles.overlayToolBtn}
+                              onPress={() => addBlockBelow(block.id, 'paragraph')}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            >
+                              <Feather name="plus" size={13} color={colors.contrastInv} />
+                            </TouchableOpacity>
+
+                            {/* '⋮⋮' Pan / Move Handle: Long press or tap to reorder */}
+                            <TouchableOpacity
+                              style={styles.overlayToolBtn}
+                              onPress={() => {
+                                setBlockMenuBlockId(block.id);
+                                setIsMoveModalOpen(true);
+                              }}
+                              onLongPress={() => {
+                                setBlockMenuBlockId(block.id);
+                                setIsMoveModalOpen(true);
+                              }}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            >
+                              <Feather name="grid" size={12} color={colors.contrastInv} />
+                            </TouchableOpacity>
+
+                            {/* '⋯' 3-Dots Button: Block actions menu */}
+                            <TouchableOpacity
+                              style={styles.overlayToolBtn}
+                              onPress={() => setBlockMenuBlockId(block.id)}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            >
+                              <Feather name="more-horizontal" size={13} color={colors.contrastInv} />
+                            </TouchableOpacity>
+                          </View>
+                        )}
+
+                        {/* Block Item Card */}
+                        <TouchableOpacity
+                          activeOpacity={0.92}
+                          onPress={() => setSelectedBlockId(block.id)}
+                          onLongPress={() => {
+                            setSelectedBlockId(block.id);
+                            setBlockMenuBlockId(block.id);
+                            setIsMoveModalOpen(true);
+                          }}
+                          style={[
+                            styles.blockCard,
+                            isSelected && { borderColor: colors.textSecondary },
+                            block.type === 'callout' && [styles.calloutCard, { backgroundColor: colors.bgCard, borderColor: colors.border }],
+                            block.type === 'code' && [styles.codeCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]
+                          ]}
+                        >
+                          <View style={styles.blockInnerRow}>
+                            {/* Todo Checkbox */}
+                            {block.type === 'todo' && (
+                              <TouchableOpacity
+                                style={[
+                                  styles.checkbox,
+                                  { borderColor: colors.border },
+                                  block.checked && { backgroundColor: colors.contrast, borderColor: colors.contrast }
+                                ]}
+                                onPress={() => toggleTodo(block.id)}
+                              >
+                                {block.checked && <Feather name="check" size={11} color={colors.contrastInv} />}
+                              </TouchableOpacity>
+                            )}
+
+                            {/* Bullet Point */}
+                            {block.type === 'bullet' && (
+                              <Text style={[styles.bulletDot, { color: colors.textSecondary }]}>•</Text>
+                            )}
+
+                            {/* Quote Border */}
+                            {block.type === 'quote' && (
+                              <View style={[styles.quoteBar, { backgroundColor: colors.contrast }]} />
+                            )}
+
+                            {/* Callout Icon */}
+                            {block.type === 'callout' && (
+                              <View style={styles.calloutIconBox}>
+                                <Feather name="info" size={15} color={colors.textMain} />
+                              </View>
+                            )}
+
+                            {/* Block Content Input */}
+                            <TextInput
+                              style={[
+                                styles.blockInput,
+                                { color: colors.textMain },
+                                block.type === 'heading1' && styles.h1Text,
+                                block.type === 'heading2' && styles.h2Text,
+                                block.type === 'heading3' && styles.h3Text,
+                                block.type === 'quote' && { fontStyle: 'italic', color: colors.textSecondary },
+                                block.type === 'code' && styles.codeFont,
+                                block.checked && styles.completedText
+                              ]}
+                              value={block.content}
+                              onChangeText={txt => updateBlockContent(block.id, txt)}
+                              onFocus={() => setSelectedBlockId(block.id)}
+                              placeholder={
+                                block.type === 'heading1'
+                                  ? 'Heading 1'
+                                  : block.type === 'heading2'
+                                  ? 'Heading 2'
+                                  : block.type === 'heading3'
+                                  ? 'Heading 3'
+                                  : 'Type content...'
+                              }
+                              placeholderTextColor={colors.textMuted}
+                              multiline
+                            />
+                          </View>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {/* Bottom Add Block Trigger */}
+                <TouchableOpacity
+                  style={[styles.addBlockTrigger, { borderColor: colors.border }]}
+                  onPress={() => addBlockBelow(null, 'paragraph')}
+                >
+                  <Feather name="plus" size={15} color={colors.textSecondary} />
+                  <Text style={[styles.addBlockTriggerText, { color: colors.textSecondary }]}>Add block</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => changeCoverStyle('mono-grid')} style={styles.coverStyleBtn}>
-                  <Text style={styles.coverStyleText}>Grid</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => changeCoverStyle('slate-gradient')} style={styles.coverStyleBtn}>
-                  <Text style={styles.coverStyleText}>Gradient</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={toggleCover} style={[styles.coverStyleBtn, { backgroundColor: '#ef4444' }]}>
-                  <Text style={[styles.coverStyleText, { color: '#ffffff' }]}>Remove</Text>
-                </TouchableOpacity>
-              </View>
+
+                <View style={{ height: 100 }} />
+              </ScrollView>
+            </TouchableWithoutFeedback>
+          ) : (
+            <View style={styles.emptyView}>
+              <Feather name="file-text" size={36} color={colors.textMuted} />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No page selected</Text>
             </View>
           )}
 
-          {/* Page Meta Controls */}
-          <View style={styles.metaRow}>
-            <TouchableOpacity onPress={toggleCover} style={[styles.pillBtn, { borderColor: colors.border }]}>
-              <Text style={[styles.pillText, { color: colors.textSecondary }]}>
-                {activeNote.hasCover ? 'Remove cover' : '+ Add cover'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+          {/* Bottom Floating Accessory Bar (Notion Quick Inserter) */}
+          {activeNote && (
+            <View style={[styles.bottomAccessoryBar, { backgroundColor: colors.bgCard, borderTopColor: colors.border }]}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.accessoryItems}>
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'paragraph')}
+                >
+                  <Feather name="type" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Text</Text>
+                </TouchableOpacity>
 
-          {/* Title Input */}
-          <TextInput
-            style={[styles.titleInput, { color: colors.textMain }]}
-            value={activeNote.title}
-            onChangeText={updateTitle}
-            placeholder="Untitled Note"
-            placeholderTextColor={colors.textMuted}
-            multiline={false}
-          />
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'heading1')}
+                >
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain, fontWeight: 'bold' }]}>H1</Text>
+                </TouchableOpacity>
 
-          {/* Blocks List */}
-          <View style={styles.blocksList}>
-            {activeNote.blocks.map((block, idx) => (
-              <View key={block.id} style={styles.blockRow}>
-                {/* Pan Reorder Actions */}
-                <View style={styles.blockGutter}>
-                  <TouchableOpacity
-                    onPress={() => moveBlock(idx, 'up')}
-                    disabled={idx === 0}
-                    style={styles.gutterBtn}
-                  >
-                    <Text style={{ color: idx === 0 ? colors.border : colors.textMuted, fontSize: 11 }}>▲</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => moveBlock(idx, 'down')}
-                    disabled={idx === activeNote.blocks.length - 1}
-                    style={styles.gutterBtn}
-                  >
-                    <Text style={{ color: idx === activeNote.blocks.length - 1 ? colors.border : colors.textMuted, fontSize: 11 }}>▼</Text>
-                  </TouchableOpacity>
-                </View>
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'heading2')}
+                >
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain, fontWeight: 'bold' }]}>H2</Text>
+                </TouchableOpacity>
 
-                {/* Todo Checkbox */}
-                {block.type === 'todo' && (
-                  <TouchableOpacity
-                    style={[
-                      styles.checkbox,
-                      { borderColor: colors.border },
-                      block.checked && { backgroundColor: colors.contrast, borderColor: colors.contrast }
-                    ]}
-                    onPress={() => toggleTodo(block.id)}
-                  >
-                    {block.checked && <Text style={{ color: colors.contrastInv, fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'todo')}
+                >
+                  <Feather name="check-square" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>To-do</Text>
+                </TouchableOpacity>
 
-                {/* Bullet indicator */}
-                {block.type === 'bullet' && (
-                  <Text style={[styles.bulletGlyph, { color: colors.textSecondary }]}>•</Text>
-                )}
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'bullet')}
+                >
+                  <Feather name="list" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Bullet</Text>
+                </TouchableOpacity>
 
-                {/* Block Content Input */}
-                <TextInput
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'callout')}
+                >
+                  <Feather name="info" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Callout</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'code')}
+                >
+                  <Feather name="code" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Code</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'quote')}
+                >
+                  <Feather name="message-square" size={13} color={colors.textMain} />
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Quote</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          )}
+        </KeyboardAvoidingView>
+
+        {/* Pan / Move Reorder Modal Sheet */}
+        <Modal visible={isMoveModalOpen} animationType="fade" transparent>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsMoveModalOpen(false)}>
+            <View style={[styles.bottomSheetCard, { backgroundColor: colors.bgCard }]}>
+              <View style={styles.sheetHandleBar} />
+              <Text style={[styles.sheetSectionTitle, { color: colors.textMuted }]}>PAN & REORDER BLOCK</Text>
+
+              <View style={styles.moveActionsRow}>
+                <TouchableOpacity
                   style={[
-                    styles.blockInput,
-                    { color: colors.textMain },
-                    block.type === 'heading1' && styles.h1,
-                    block.type === 'heading2' && styles.h2,
-                    block.type === 'heading3' && styles.h3,
-                    block.type === 'quote' && [styles.quote, { borderLeftColor: colors.contrast, color: colors.textSecondary }],
-                    block.type === 'code' && [styles.code, { backgroundColor: colors.bgCard }],
-                    block.type === 'callout' && [styles.callout, { backgroundColor: colors.bgCard, borderColor: colors.border }],
-                    block.checked && styles.completed
+                    styles.moveBigBtn,
+                    { backgroundColor: colors.bgSubtle },
+                    activeBlockIndex <= 0 && { opacity: 0.35 }
                   ]}
-                  value={block.content}
-                  onChangeText={txt => updateBlockContent(block.id, txt)}
-                  placeholder={block.type === 'heading1' ? 'Heading 1' : 'Type here...'}
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                />
+                  disabled={activeBlockIndex <= 0}
+                  onPress={() => {
+                    if (activeBlockIndex > 0) moveBlock(activeBlockIndex, 'up');
+                  }}
+                >
+                  <Feather name="arrow-up" size={18} color={colors.textMain} />
+                  <Text style={[styles.moveBigBtnText, { color: colors.textMain }]}>Move Up</Text>
+                </TouchableOpacity>
 
-                {/* Delete Block */}
-                <TouchableOpacity onPress={() => deleteBlock(block.id)} style={styles.deleteBlockBtn}>
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>✕</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.moveBigBtn,
+                    { backgroundColor: colors.bgSubtle },
+                    activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1 && { opacity: 0.35 }
+                  ]}
+                  disabled={activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1}
+                  onPress={() => {
+                    if (activeNote && activeBlockIndex < activeNote.blocks.length - 1) {
+                      moveBlock(activeBlockIndex, 'down');
+                    }
+                  }}
+                >
+                  <Feather name="arrow-down" size={18} color={colors.textMain} />
+                  <Text style={[styles.moveBigBtnText, { color: colors.textMain }]}>Move Down</Text>
                 </TouchableOpacity>
               </View>
-            ))}
-          </View>
 
-          {/* Add Block Trigger Button */}
-          <TouchableOpacity
-            style={[styles.addBlockTrigger, { borderColor: colors.border }]}
-            onPress={() => setIsSlashOpen(true)}
-          >
-            <Text style={[styles.addBlockText, { color: colors.textSecondary }]}>+ Add Block (Slash command)</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      ) : (
-        <View style={styles.emptyView}>
-          <Text style={{ color: colors.textMuted }}>No document selected.</Text>
-        </View>
-      )}
-
-      {/* Side Drawer Modal */}
-      <Modal visible={isDrawerOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.drawerContent, { backgroundColor: colors.bgCard }]}>
-            <View style={styles.drawerHeader}>
-              <Text style={[styles.drawerTitle, { color: colors.textMain }]}>Pages</Text>
-              <TouchableOpacity onPress={() => setIsDrawerOpen(false)}>
-                <Text style={{ color: colors.textMuted, fontSize: 18 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TextInput
-              style={[styles.searchInput, { backgroundColor: colors.bgApp, color: colors.textMain, borderColor: colors.border }]}
-              placeholder="Search pages..."
-              placeholderTextColor={colors.textMuted}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-
-            <ScrollView style={{ flex: 1 }}>
-              {filteredNotes.map(n => (
-                <View key={n.id} style={[styles.pageRow, n.id === activeNoteId && { backgroundColor: colors.bgSubtle }]}>
-                  <TouchableOpacity style={{ flex: 1 }} onPress={() => selectNote(n.id)}>
-                    <Text style={[styles.pageRowTitle, { color: colors.textMain }]}>
-                      {n.title.trim() || 'Untitled Note'}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => deleteNote(n.id)} style={{ padding: 6 }}>
-                    <Text style={{ color: '#ef4444', fontSize: 12 }}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[styles.newNoteBtn, { backgroundColor: colors.contrast }]}
-              onPress={() => {
-                createNote();
-                setIsDrawerOpen(false);
-              }}
-            >
-              <Text style={{ color: colors.contrastInv, fontWeight: 'bold' }}>+ New Page</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Slash Command / Block Picker Sheet */}
-      <Modal visible={isSlashOpen} animationType="fade" transparent>
-        <TouchableOpacity style={styles.modalOverlay} onPress={() => setIsSlashOpen(false)}>
-          <View style={[styles.sheetContent, { backgroundColor: colors.bgCard }]}>
-            <Text style={[styles.sheetTitle, { color: colors.textMuted }]}>INSERT BLOCK</Text>
-            {[
-              { type: 'paragraph', label: 'Text (Paragraph)' },
-              { type: 'heading1', label: 'Heading 1' },
-              { type: 'heading2', label: 'Heading 2' },
-              { type: 'heading3', label: 'Heading 3' },
-              { type: 'todo', label: 'To-do List Item' },
-              { type: 'bullet', label: 'Bulleted List' },
-              { type: 'code', label: 'Code Block' },
-              { type: 'quote', label: 'Quote' },
-              { type: 'callout', label: 'Callout Box' }
-            ].map(item => (
               <TouchableOpacity
-                key={item.type}
-                style={[styles.sheetItem, { borderBottomColor: colors.border }]}
-                onPress={() => addBlock(item.type as BlockType)}
+                style={[styles.sheetCloseButton, { backgroundColor: colors.contrast }]}
+                onPress={() => setIsMoveModalOpen(false)}
               >
-                <Text style={[styles.sheetItemText, { color: colors.textMain }]}>{item.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Cloud Sync Setup Modal */}
-      <Modal visible={isCloudOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.cloudModalContent, { backgroundColor: colors.bgCard }]}>
-            <View style={styles.drawerHeader}>
-              <Text style={[styles.drawerTitle, { color: colors.textMain }]}>Cloud Sync (Supabase)</Text>
-              <TouchableOpacity onPress={() => setIsCloudOpen(false)}>
-                <Text style={{ color: colors.textMuted, fontSize: 18 }}>✕</Text>
+                <Text style={{ color: colors.contrastInv, fontWeight: 'bold' }}>Done</Text>
               </TouchableOpacity>
             </View>
+          </TouchableOpacity>
+        </Modal>
 
-            <Text style={[styles.modalDesc, { color: colors.textSecondary }]}>
-              Connect your free 500MB Supabase PostgreSQL database to sync seamlessly with the web version.
-            </Text>
+        {/* 3-Dots Block Options Modal */}
+        <Modal visible={Boolean(blockMenuBlockId)} animationType="fade" transparent>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setBlockMenuBlockId(null)}>
+            <View style={[styles.bottomSheetCard, { backgroundColor: colors.bgCard }]}>
+              <View style={styles.sheetHandleBar} />
+              <Text style={[styles.sheetSectionTitle, { color: colors.textMuted }]}>BLOCK OPTIONS</Text>
 
-            <TextInput
-              style={[styles.cloudInput, { backgroundColor: colors.bgApp, color: colors.textMain, borderColor: colors.border }]}
-              placeholder="Supabase Project URL"
-              placeholderTextColor={colors.textMuted}
-              value={supabaseUrl}
-              onChangeText={setSupabaseUrl}
-              autoCapitalize="none"
-            />
+              <TouchableOpacity
+                style={styles.sheetActionRow}
+                onPress={() => {
+                  if (activeBlockIndex > 0) moveBlock(activeBlockIndex, 'up');
+                  setBlockMenuBlockId(null);
+                }}
+                disabled={activeBlockIndex <= 0}
+              >
+                <Feather name="arrow-up" size={16} color={activeBlockIndex <= 0 ? colors.border : colors.textMain} />
+                <Text style={[styles.sheetActionText, { color: activeBlockIndex <= 0 ? colors.border : colors.textMain }]}>
+                  Move Up
+                </Text>
+              </TouchableOpacity>
 
-            <TextInput
-              style={[styles.cloudInput, { backgroundColor: colors.bgApp, color: colors.textMain, borderColor: colors.border }]}
-              placeholder="Supabase Anon Key"
-              placeholderTextColor={colors.textMuted}
-              value={supabaseAnonKey}
-              onChangeText={setSupabaseAnonKey}
-              secureTextEntry
-              autoCapitalize="none"
-            />
+              <TouchableOpacity
+                style={styles.sheetActionRow}
+                onPress={() => {
+                  if (activeNote && activeBlockIndex < activeNote.blocks.length - 1) {
+                    moveBlock(activeBlockIndex, 'down');
+                  }
+                  setBlockMenuBlockId(null);
+                }}
+                disabled={activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1}
+              >
+                <Feather
+                  name="arrow-down"
+                  size={16}
+                  color={activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1 ? colors.border : colors.textMain}
+                />
+                <Text
+                  style={[
+                    styles.sheetActionText,
+                    { color: activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1 ? colors.border : colors.textMain }
+                  ]}
+                >
+                  Move Down
+                </Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.cloudSaveBtn, { backgroundColor: colors.contrast }]}
-              onPress={handleCloudSave}
-              disabled={isTestingCloud}
-            >
-              <Text style={{ color: colors.contrastInv, fontWeight: 'bold' }}>
-                {isTestingCloud ? 'Connecting...' : 'Save & Sync'}
-              </Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.sheetActionRow}
+                onPress={() => {
+                  if (blockMenuBlockId) duplicateBlock(blockMenuBlockId);
+                }}
+              >
+                <Feather name="copy" size={16} color={colors.textMain} />
+                <Text style={[styles.sheetActionText, { color: colors.textMain }]}>Duplicate Below</Text>
+              </TouchableOpacity>
+
+              <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+
+              <Text style={[styles.subSectionTitle, { color: colors.textMuted }]}>CONVERT TO</Text>
+              <View style={styles.convertChipsGrid}>
+                {[
+                  { type: 'paragraph', label: 'Text' },
+                  { type: 'heading1', label: 'H1' },
+                  { type: 'heading2', label: 'H2' },
+                  { type: 'heading3', label: 'H3' },
+                  { type: 'todo', label: 'To-do' },
+                  { type: 'bullet', label: 'Bullet' },
+                  { type: 'quote', label: 'Quote' },
+                  { type: 'code', label: 'Code' },
+                  { type: 'callout', label: 'Callout' }
+                ].map(item => (
+                  <TouchableOpacity
+                    key={item.type}
+                    style={[styles.convertChip, { backgroundColor: colors.bgSubtle }]}
+                    onPress={() => {
+                      if (blockMenuBlockId) convertBlockType(blockMenuBlockId, item.type as BlockType);
+                    }}
+                  >
+                    <Text style={[styles.convertChipText, { color: colors.textMain }]}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+
+              <TouchableOpacity
+                style={[styles.sheetActionRow, { marginTop: 4 }]}
+                onPress={() => {
+                  if (blockMenuBlockId) deleteBlock(blockMenuBlockId);
+                }}
+              >
+                <Feather name="trash-2" size={16} color="#ef4444" />
+                <Text style={[styles.sheetActionText, { color: '#ef4444' }]}>Delete Block</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Icon Picker Modal */}
+        <Modal visible={isIconPickerOpen} animationType="fade" transparent>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsIconPickerOpen(false)}>
+            <View style={[styles.bottomSheetCard, { backgroundColor: colors.bgCard }]}>
+              <View style={styles.sheetHandleBar} />
+              <Text style={[styles.sheetSectionTitle, { color: colors.textMuted }]}>CHOOSE DOCUMENT ICON</Text>
+
+              <View style={styles.iconGrid}>
+                {AVAILABLE_PAGE_ICONS.map(iconKey => (
+                  <TouchableOpacity
+                    key={iconKey}
+                    style={[
+                      styles.iconPickBox,
+                      { backgroundColor: colors.bgSubtle, borderColor: colors.border },
+                      activeNote?.icon === iconKey && { borderColor: colors.contrast, borderWidth: 2 }
+                    ]}
+                    onPress={() => updateNoteIcon(iconKey)}
+                  >
+                    <Feather name={iconKey as any} size={22} color={colors.textMain} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Side Drawer (Pages List) */}
+        <Modal visible={isDrawerOpen} animationType="slide" transparent>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.drawerCard, { backgroundColor: colors.bgCard }]}>
+              <View style={[styles.drawerHeader, { borderBottomColor: colors.border }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Feather name="book-open" size={18} color={colors.textMain} />
+                  <Text style={[styles.drawerHeading, { color: colors.textMain }]}>Documents</Text>
+                </View>
+                <TouchableOpacity onPress={() => setIsDrawerOpen(false)}>
+                  <Feather name="x" size={20} color={colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.searchBarWrapper}>
+                <Feather name="search" size={15} color={colors.textMuted} />
+                <TextInput
+                  style={[styles.searchBarInput, { color: colors.textMain }]}
+                  placeholder="Filter pages..."
+                  placeholderTextColor={colors.textMuted}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+              </View>
+
+              <ScrollView style={{ flex: 1 }}>
+                {filteredNotes.map(n => {
+                  const isActive = n.id === activeNoteId;
+                  return (
+                    <View
+                      key={n.id}
+                      style={[
+                        styles.drawerPageRow,
+                        isActive && { backgroundColor: colors.bgSubtle }
+                      ]}
+                    >
+                      <TouchableOpacity style={styles.drawerPageTouchable} onPress={() => selectNote(n.id)}>
+                        <Feather
+                          name={(n.icon as any) || 'file-text'}
+                          size={15}
+                          color={isActive ? colors.textMain : colors.textSecondary}
+                        />
+                        <Text
+                          style={[
+                            styles.drawerPageTitle,
+                            { color: isActive ? colors.textMain : colors.textSecondary },
+                            isActive && { fontWeight: '700' }
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {n.title.trim() || 'Untitled Note'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        onPress={() => deleteNote(n.id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={{ padding: 4 }}
+                      >
+                        <Feather name="trash-2" size={14} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.newNoteBtn, { backgroundColor: colors.contrast }]}
+                onPress={() => {
+                  createNote();
+                  setIsDrawerOpen(false);
+                }}
+              >
+                <Feather name="plus" size={16} color={colors.contrastInv} />
+                <Text style={[styles.newNoteBtnText, { color: colors.contrastInv }]}>New Page</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+
+        {/* Cloud Sync Setup Modal */}
+        <Modal visible={isCloudOpen} animationType="slide" transparent>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.cloudModalCard, { backgroundColor: colors.bgCard }]}>
+              <View style={[styles.drawerHeader, { borderBottomColor: colors.border }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Feather name="cloud" size={18} color={colors.textMain} />
+                  <Text style={[styles.drawerHeading, { color: colors.textMain }]}>Cloud Sync</Text>
+                </View>
+                <TouchableOpacity onPress={() => setIsCloudOpen(false)}>
+                  <Feather name="x" size={20} color={colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.cloudModalDesc, { color: colors.textSecondary }]}>
+                Connect to your free Supabase PostgreSQL database to sync across desktop and mobile.
+              </Text>
+
+              <TextInput
+                style={[styles.cloudInput, { backgroundColor: colors.bgApp, color: colors.textMain, borderColor: colors.border }]}
+                placeholder="Supabase Project URL"
+                placeholderTextColor={colors.textMuted}
+                value={supabaseUrl}
+                onChangeText={setSupabaseUrl}
+                autoCapitalize="none"
+              />
+
+              <TextInput
+                style={[styles.cloudInput, { backgroundColor: colors.bgApp, color: colors.textMain, borderColor: colors.border }]}
+                placeholder="Supabase Anon Key"
+                placeholderTextColor={colors.textMuted}
+                value={supabaseAnonKey}
+                onChangeText={setSupabaseAnonKey}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+
+              <TouchableOpacity
+                style={[styles.cloudSaveBtn, { backgroundColor: colors.contrast }]}
+                onPress={handleCloudSave}
+                disabled={isTestingCloud}
+              >
+                <Text style={{ color: colors.contrastInv, fontWeight: 'bold' }}>
+                  {isTestingCloud ? 'Connecting...' : 'Save & Sync'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -570,266 +1041,484 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderBottomWidth: 1
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     flex: 1
   },
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
-  },
-  headerTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    flex: 1
+    gap: 6
   },
   iconBtn: {
     width: 34,
     height: 34,
-    borderRadius: 6,
+    borderRadius: 7,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  iconText: {
-    fontSize: 18
+  breadcrumbCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+    marginRight: 6
+  },
+  breadcrumbRoot: {
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  breadcrumbDivider: {
+    fontSize: 13
+  },
+  breadcrumbTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1
   },
   scrollView: {
     flex: 1
   },
   scrollContent: {
-    padding: 18,
-    paddingBottom: 80
+    paddingBottom: 40
   },
+  // Cover Banner
   coverBanner: {
-    height: 140,
-    borderRadius: 8,
-    marginBottom: 16,
-    justifyContent: 'flex-end',
-    padding: 8
+    width: '100%',
+    minHeight: 175,
+    borderBottomWidth: 1,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 20,
+    justifyContent: 'space-between'
   },
-  coverControls: {
+  coverTopBar: {
     flexDirection: 'row',
-    gap: 6,
-    alignSelf: 'flex-end'
+    justifyContent: 'flex-end',
+    width: '100%'
   },
-  coverStyleBtn: {
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  coverPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    borderRadius: 6,
+    padding: 3
+  },
+  coverPaletteBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 2
+  },
+  coverPill: {
+    paddingVertical: 3,
+    paddingHorizontal: 7,
     borderRadius: 4
   },
-  coverStyleText: {
+  coverPillActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)'
+  },
+  coverPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#a1a1aa'
+  },
+  coverPillTextActive: {
+    color: '#ffffff'
+  },
+  coverTitleWrapper: {
+    width: '100%',
+    marginTop: 18
+  },
+  coverTitleInput: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    lineHeight: 38,
     color: '#ffffff',
-    fontSize: 11
+    textShadowColor: 'rgba(0, 0, 0, 0.85)',
+    textShadowRadius: 6,
+    padding: 0,
+    margin: 0
   },
-  metaRow: {
+  // Sub-Cover Meta
+  pageMetaRow: {
     flexDirection: 'row',
-    marginBottom: 8
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 6
   },
-  pillBtn: {
+  changeIconPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     borderWidth: 1,
-    paddingHorizontal: 10,
+    borderRadius: 20,
     paddingVertical: 4,
-    borderRadius: 12
+    paddingHorizontal: 10
   },
-  pillText: {
-    fontSize: 12
+  changeIconText: {
+    fontSize: 12,
+    fontWeight: '500'
   },
-  titleInput: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 16,
-    paddingVertical: 4
+  readingMetaText: {
+    fontSize: 11,
+    fontWeight: '500'
   },
-  blocksList: {
-    gap: 8
-  },
-  blockRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+  // Blocks Canvas
+  blocksCanvas: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
     gap: 6
   },
-  blockGutter: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 2,
-    marginTop: 2
+  blockWrapper: {
+    position: 'relative',
+    marginVertical: 2
   },
-  gutterBtn: {
+  // Overlay Toolbar on Top-Left
+  blockOverlayToolbar: {
+    position: 'absolute',
+    top: -14,
+    left: 8,
+    zIndex: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 6,
     paddingHorizontal: 4,
-    paddingVertical: 2
+    paddingVertical: 2,
+    gap: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5
+  },
+  overlayToolBtn: {
+    padding: 3
+  },
+  blockCard: {
+    borderWidth: 1,
+    borderColor: 'transparent',
+    borderRadius: 7,
+    paddingVertical: 6,
+    paddingHorizontal: 8
+  },
+  calloutCard: {
+    borderWidth: 1,
+    padding: 10
+  },
+  codeCard: {
+    borderWidth: 1,
+    padding: 10
+  },
+  blockInnerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8
   },
   checkbox: {
     width: 18,
     height: 18,
-    borderWidth: 1.5,
     borderRadius: 4,
+    borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4
+    marginTop: 3
   },
-  bulletGlyph: {
+  bulletDot: {
     fontSize: 18,
-    marginRight: 4,
-    lineHeight: 22
+    lineHeight: 22,
+    marginTop: -1
+  },
+  quoteBar: {
+    width: 3,
+    alignSelf: 'stretch',
+    borderRadius: 2,
+    marginRight: 4
+  },
+  calloutIconBox: {
+    marginTop: 2
   },
   blockInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 15.5,
     lineHeight: 22,
-    paddingVertical: 2
+    padding: 0,
+    margin: 0
   },
-  h1: {
+  h1Text: {
     fontSize: 24,
-    fontWeight: 'bold',
-    marginTop: 8
+    fontWeight: '800',
+    lineHeight: 29
   },
-  h2: {
+  h2Text: {
     fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 6
+    fontWeight: '700',
+    lineHeight: 25
   },
-  h3: {
+  h3Text: {
     fontSize: 17,
     fontWeight: '600',
-    marginTop: 4
+    lineHeight: 22
   },
-  quote: {
-    borderLeftWidth: 3,
-    paddingLeft: 10,
-    fontStyle: 'italic'
-  },
-  code: {
-    fontFamily: 'monospace',
-    padding: 8,
-    borderRadius: 6,
-    fontSize: 13
-  },
-  callout: {
-    padding: 10,
-    borderRadius: 6,
-    borderWidth: 1
-  },
-  completed: {
+  completedText: {
     textDecorationLine: 'line-through',
-    opacity: 0.5
+    opacity: 0.45
   },
-  deleteBlockBtn: {
-    padding: 4,
-    marginTop: 2
+  codeFont: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 13.5
   },
   addBlockTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginHorizontal: 14,
+    marginTop: 16,
+    paddingVertical: 10,
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderRadius: 6,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 18
+    borderRadius: 8
   },
-  addBlockText: {
+  addBlockTriggerText: {
     fontSize: 13,
-    fontWeight: '500'
+    fontWeight: '600'
   },
-  emptyView: {
+  // Bottom Floating Bar
+  bottomAccessoryBar: {
+    height: 46,
+    borderTopWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8
+  },
+  accessoryItems: {
+    alignItems: 'center',
+    gap: 6
+  },
+  accessoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6
+  },
+  accessoryChipText: {
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  // Modals & Bottom Sheets
+  modalBackdrop: {
     flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'flex-end'
+  },
+  bottomSheetCard: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    paddingBottom: 32
+  },
+  sheetHandleBar: {
+    width: 36,
+    height: 4,
+    backgroundColor: 'rgba(128, 128, 128, 0.4)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 12
+  },
+  sheetSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 12
+  },
+  moveActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 14
+  },
+  moveBigBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 8
+  },
+  moveBigBtnText: {
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  sheetCloseButton: {
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end'
+  sheetActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 11
   },
-  drawerContent: {
-    width: '85%',
-    height: '100%',
-    padding: 20
+  sheetActionText: {
+    fontSize: 14,
+    fontWeight: '500'
+  },
+  menuDivider: {
+    height: 1,
+    marginVertical: 10
+  },
+  subSectionTitle: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 8
+  },
+  convertChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  convertChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6
+  },
+  convertChipText: {
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  // Icon Picker
+  iconGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'center',
+    paddingVertical: 8
+  },
+  iconPickBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  // Drawer
+  drawerCard: {
+    height: '85%',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16
   },
   drawerHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    marginBottom: 10
   },
-  drawerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold'
+  drawerHeading: {
+    fontSize: 16,
+    fontWeight: '700'
   },
-  searchInput: {
-    height: 40,
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    fontSize: 14
+  searchBarWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(128, 128, 128, 0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 38,
+    marginBottom: 10
   },
-  pageRow: {
+  searchBarInput: {
+    flex: 1,
+    fontSize: 13.5
+  },
+  drawerPageRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 6
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    marginVertical: 1
   },
-  pageRowTitle: {
-    fontSize: 14,
-    fontWeight: '500'
+  drawerPageTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1
+  },
+  drawerPageTitle: {
+    fontSize: 13.5
   },
   newNoteBtn: {
-    height: 44,
-    borderRadius: 6,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 8,
     marginTop: 10
   },
-  sheetContent: {
+  newNoteBtnText: {
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  // Cloud Modal
+  cloudModalCard: {
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    padding: 20
+    padding: 16,
+    paddingBottom: 32
   },
-  sheetTitle: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    letterSpacing: 0.5
-  },
-  sheetItem: {
-    paddingVertical: 12,
-    borderBottomWidth: 1
-  },
-  sheetItemText: {
-    fontSize: 15,
-    fontWeight: '500'
-  },
-  cloudModalContent: {
-    margin: 20,
-    borderRadius: 12,
-    padding: 20
-  },
-  modalDesc: {
-    fontSize: 13,
+  cloudModalDesc: {
+    fontSize: 12.5,
     lineHeight: 18,
     marginBottom: 14
   },
   cloudInput: {
     height: 42,
     borderWidth: 1,
-    borderRadius: 6,
+    borderRadius: 8,
     paddingHorizontal: 12,
-    marginBottom: 10,
-    fontSize: 13
+    fontSize: 13.5,
+    marginBottom: 10
   },
   cloudSaveBtn: {
-    height: 44,
-    borderRadius: 6,
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 6
+  },
+  emptyView: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingTop: 80
+  },
+  emptyText: {
+    fontSize: 14,
+    fontWeight: '500'
   }
 });

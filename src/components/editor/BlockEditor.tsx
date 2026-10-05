@@ -17,7 +17,6 @@ export const BlockEditor: React.FC = () => {
     deleteBlock,
     reorderBlocks,
     convertBlockType,
-    toggleNoteCover,
     setCoverStyle
   } = useNotes();
 
