@@ -28,25 +28,29 @@ export const PageHeader: React.FC = () => {
           <span>Change icon</span>
         </button>
 
-        <button
-          className="header-pill-btn"
-          onClick={toggleNoteCover}
-          type="button"
-          title={activeNote.hasCover ? 'Remove page cover' : 'Add page cover'}
-        >
-          <ImageIcon size={14} />
-          <span>{activeNote.hasCover ? 'Remove cover' : 'Add cover'}</span>
-        </button>
+        {!activeNote.hasCover && (
+          <button
+            className="header-pill-btn"
+            onClick={toggleNoteCover}
+            type="button"
+            title="Add page cover"
+          >
+            <ImageIcon size={14} />
+            <span>Add cover</span>
+          </button>
+        )}
       </div>
 
-      <input
-        type="text"
-        className="document-main-title"
-        placeholder="Untitled Note"
-        value={activeNote.title}
-        onChange={e => updateNoteTitle(e.target.value)}
-        spellCheck={false}
-      />
+      {!activeNote.hasCover && (
+        <input
+          type="text"
+          className="document-main-title"
+          placeholder="Untitled Note"
+          value={activeNote.title}
+          onChange={e => updateNoteTitle(e.target.value)}
+          spellCheck={false}
+        />
+      )}
     </div>
   );
 };

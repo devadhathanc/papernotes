@@ -9,6 +9,7 @@ import type { BlockType } from '../../domain/Note';
 export const BlockEditor: React.FC = () => {
   const {
     activeNote,
+    updateNoteTitle,
     focusedBlockId,
     setFocusedBlockId,
     updateBlock,
@@ -59,9 +60,10 @@ export const BlockEditor: React.FC = () => {
         {/* Cover Banner */}
         {activeNote.hasCover && (
           <PageCover
+            title={activeNote.title}
             style={activeNote.coverStyle}
-            onRemove={toggleNoteCover}
             onSelectStyle={setCoverStyle}
+            onUpdateTitle={updateNoteTitle}
           />
         )}
 

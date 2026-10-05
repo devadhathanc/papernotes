@@ -43,10 +43,23 @@ export const BlockItem: React.FC<BlockItemProps> = ({
   onFocusPrev
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isMenuOpen]);
 
   // Sync content into editable div without destroying user cursor
   useEffect(() => {
@@ -219,13 +232,13 @@ export const BlockItem: React.FC<BlockItemProps> = ({
 
   return (
     <div
-      className={`editor-block-row ${block.type} ${block.checked ? 'completed' : ''} ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+      className={`editor-block-row ${block.type} ${block.checked ? 'completed' : ''} ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'is-drag-over' : ''} ${isMenuOpen ? 'is-menu-open' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {/* Pan & Drag Handle Gutter */}
-      <div className="block-gutter" contentEditable={false}>
+      <div className={`block-gutter ${isMenuOpen ? 'is-menu-open' : ''}`} contentEditable={false}>
         <button
           className="gutter-btn add-btn"
           title="Add block below"
@@ -234,15 +247,17 @@ export const BlockItem: React.FC<BlockItemProps> = ({
         >
           <Plus size={13} />
         </button>
-        <div
+        <button
           className="gutter-btn drag-handle"
           title="Drag to pan / reorder"
           draggable
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
+          type="button"
+          aria-label="Drag to reorder"
         >
           <GripVertical size={13} />
-        </div>
+        </button>
         <button
           className="gutter-btn options-btn"
           title="Block options"
@@ -254,7 +269,7 @@ export const BlockItem: React.FC<BlockItemProps> = ({
 
         {/* Quick Context Popover for Pan/Reorder & Actions */}
         {isMenuOpen && (
-          <div className="block-quick-menu" onMouseLeave={() => setIsMenuOpen(false)}>
+          <div ref={menuRef} className="block-quick-menu" onClick={e => e.stopPropagation()}>
             <button
               className="quick-menu-item"
               disabled={index === 0}
