@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNotes } from '../../state/NotesContext';
 import { PageCover } from './PageCover';
 import { PageHeader } from './PageHeader';
@@ -19,18 +19,43 @@ export const BlockEditor: React.FC = () => {
     deleteBlock,
     reorderBlocks,
     convertBlockType,
-    setCoverStyle
+    setCoverStyle,
+    undo,
+    redo
   } = useNotes();
 
   const [slashMenuState, setSlashMenuState] = useState<{
     isOpen: boolean;
     position: { top: number; left: number };
     blockId: string | null;
+    query: string;
   }>({
     isOpen: false,
     position: { top: 0, left: 0 },
-    blockId: null
+    blockId: null,
+    query: ''
   });
+
+  // Global Keyboard shortcuts: Cmd+Z (Undo), Cmd+Shift+Z / Cmd+Y (Redo)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          redo();
+        } else {
+          e.preventDefault();
+          undo();
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
 
   if (!activeNote) {
     return (
@@ -44,19 +69,41 @@ export const BlockEditor: React.FC = () => {
     return <LockedScreen />;
   }
 
-  const handleOpenSlashMenu = (blockId: string, rect: DOMRect) => {
+  const handleOpenSlashMenu = (blockId: string, rect: DOMRect, query?: string) => {
     setSlashMenuState({
       isOpen: true,
       position: { top: rect.bottom + 4, left: rect.left },
-      blockId
+      blockId,
+      query: query || ''
     });
   };
 
   const handleSelectSlashType = (type: BlockType) => {
-    if (slashMenuState.blockId) {
-      convertBlockType(slashMenuState.blockId, type);
+    if (slashMenuState.blockId && activeNote) {
+      const targetBlock = activeNote.blocks.find(b => b.id === slashMenuState.blockId);
+      let cleanedContent = targetBlock ? targetBlock.content : '';
+
+      // Strip the trailing slash and slash query command
+      // e.g., "/" -> ""
+      // "/heading" -> ""
+      // "Intro /bullet" -> "Intro"
+      // "<p>Hello /todo</p>" -> "<p>Hello</p>"
+      const textOnly = cleanedContent.replace(/<[^>]*>/g, '');
+      const lastSlashIdx = textOnly.lastIndexOf('/');
+      if (lastSlashIdx !== -1) {
+        if (textOnly.trim().startsWith('/') && !textOnly.trim().includes(' ')) {
+          cleanedContent = '';
+        } else {
+          const rawSlashIdx = cleanedContent.lastIndexOf('/');
+          if (rawSlashIdx !== -1) {
+            cleanedContent = cleanedContent.substring(0, rawSlashIdx).trimEnd();
+          }
+        }
+      }
+
+      convertBlockType(slashMenuState.blockId, type, cleanedContent);
     }
-    setSlashMenuState({ isOpen: false, position: { top: 0, left: 0 }, blockId: null });
+    setSlashMenuState({ isOpen: false, position: { top: 0, left: 0 }, blockId: null, query: '' });
   };
 
   return (
@@ -102,7 +149,7 @@ export const BlockEditor: React.FC = () => {
                 onDelete={() => deleteBlock(block.id)}
                 onReorder={reorderBlocks}
                 onConvertType={type => convertBlockType(block.id, type)}
-                onOpenSlashMenu={rect => handleOpenSlashMenu(block.id, rect)}
+                onOpenSlashMenu={(rect, query) => handleOpenSlashMenu(block.id, rect, query)}
                 onFocusNext={() => {
                   if (idx < activeNote.blocks.length - 1) {
                     setFocusedBlockId(activeNote.blocks[idx + 1].id);
@@ -136,8 +183,9 @@ export const BlockEditor: React.FC = () => {
         {slashMenuState.isOpen && (
           <SlashMenu
             position={slashMenuState.position}
+            query={slashMenuState.query}
             onSelect={handleSelectSlashType}
-            onClose={() => setSlashMenuState({ isOpen: false, position: { top: 0, left: 0 }, blockId: null })}
+            onClose={() => setSlashMenuState({ isOpen: false, position: { top: 0, left: 0 }, blockId: null, query: '' })}
           />
         )}
       </div>

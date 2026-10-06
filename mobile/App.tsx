@@ -181,7 +181,6 @@ function MainAppContent() {
   // Interactive Block States
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [blockMenuBlockId, setBlockMenuBlockId] = useState<string | null>(null);
-  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
 
   // Modals
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -1013,22 +1012,6 @@ function MainAppContent() {
                               <Feather name="plus" size={13} color={colors.contrastInv} />
                             </TouchableOpacity>
 
-                            {/* '⋮⋮' Pan / Move Handle: Long press or tap to reorder */}
-                            <TouchableOpacity
-                              style={styles.overlayToolBtn}
-                              onPress={() => {
-                                setBlockMenuBlockId(block.id);
-                                setIsMoveModalOpen(true);
-                              }}
-                              onLongPress={() => {
-                                setBlockMenuBlockId(block.id);
-                                setIsMoveModalOpen(true);
-                              }}
-                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                            >
-                              <Feather name="grid" size={12} color={colors.contrastInv} />
-                            </TouchableOpacity>
-
                             {/* '⋯' 3-Dots Button: Block actions menu */}
                             <TouchableOpacity
                               style={styles.overlayToolBtn}
@@ -1047,7 +1030,6 @@ function MainAppContent() {
                           onLongPress={() => {
                             setSelectedBlockId(block.id);
                             setBlockMenuBlockId(block.id);
-                            setIsMoveModalOpen(true);
                           }}
                           style={[
                             styles.blockCard,
@@ -1258,57 +1240,6 @@ function MainAppContent() {
           )}
         </KeyboardAvoidingView>
       )}
-
-        {/* Pan / Move Reorder Modal Sheet */}
-        <Modal visible={isMoveModalOpen} animationType="fade" transparent>
-          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsMoveModalOpen(false)}>
-            <View style={[styles.bottomSheetCard, { backgroundColor: colors.bgCard }]}>
-              <View style={styles.sheetHandleBar} />
-              <Text style={[styles.sheetSectionTitle, { color: colors.textMuted }]}>PAN & REORDER BLOCK</Text>
-
-              <View style={styles.moveActionsRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.moveBigBtn,
-                    { backgroundColor: colors.bgSubtle },
-                    activeBlockIndex <= 0 && { opacity: 0.35 }
-                  ]}
-                  disabled={activeBlockIndex <= 0}
-                  onPress={() => {
-                    if (activeBlockIndex > 0) moveBlock(activeBlockIndex, 'up');
-                  }}
-                >
-                  <Feather name="arrow-up" size={18} color={colors.textMain} />
-                  <Text style={[styles.moveBigBtnText, { color: colors.textMain }]}>Move Up</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.moveBigBtn,
-                    { backgroundColor: colors.bgSubtle },
-                    activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1 && { opacity: 0.35 }
-                  ]}
-                  disabled={activeBlockIndex >= (activeNote?.blocks.length ?? 0) - 1}
-                  onPress={() => {
-                    if (activeNote && activeBlockIndex < activeNote.blocks.length - 1) {
-                      moveBlock(activeBlockIndex, 'down');
-                    }
-                  }}
-                >
-                  <Feather name="arrow-down" size={18} color={colors.textMain} />
-                  <Text style={[styles.moveBigBtnText, { color: colors.textMain }]}>Move Down</Text>
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.sheetCloseButton, { backgroundColor: colors.contrast }]}
-                onPress={() => setIsMoveModalOpen(false)}
-              >
-                <Text style={{ color: colors.contrastInv, fontWeight: 'bold' }}>Done</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
 
         {/* 3-Dots Block Options Modal */}
         <Modal visible={Boolean(blockMenuBlockId)} animationType="fade" transparent>

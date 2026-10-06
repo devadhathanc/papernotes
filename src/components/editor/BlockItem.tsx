@@ -10,7 +10,18 @@ import {
   ChevronUp,
   ChevronDown,
   Trash2,
-  CopyPlus
+  CopyPlus,
+  Type,
+  Heading1,
+  Heading2,
+  Heading3,
+  CheckSquare,
+  List,
+  ListOrdered,
+  Quote,
+  Code2,
+  AlertCircle,
+  Minus
 } from 'lucide-react';
 
 interface BlockItemProps {
@@ -24,7 +35,7 @@ interface BlockItemProps {
   onDelete: () => void;
   onReorder: (fromIdx: number, toIdx: number) => void;
   onConvertType: (type: BlockType) => void;
-  onOpenSlashMenu: (rect: DOMRect) => void;
+  onOpenSlashMenu: (rect: DOMRect, query?: string) => void;
   onFocusNext: () => void;
   onFocusPrev: () => void;
 }
@@ -69,11 +80,17 @@ export const BlockItem: React.FC<BlockItemProps> = ({
   // Sync content into editable div without destroying user cursor
   useEffect(() => {
     if (contentRef.current && contentRef.current.innerHTML !== block.content) {
-      if (document.activeElement !== contentRef.current) {
-        contentRef.current.innerHTML = block.content;
+      contentRef.current.innerHTML = block.content;
+      if (document.activeElement === contentRef.current) {
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.selectNodeContents(contentRef.current);
+        range.collapse(false);
+        sel?.removeAllRanges();
+        sel?.addRange(range);
       }
     }
-  }, [block.content]);
+  }, [block.content, block.type]);
 
   // Focus management
   useEffect(() => {
@@ -134,8 +151,11 @@ export const BlockItem: React.FC<BlockItemProps> = ({
     // Slash command trigger
     const slashIdx = text.lastIndexOf('/');
     if (slashIdx !== -1 && contentRef.current) {
-      const rect = contentRef.current.getBoundingClientRect();
-      onOpenSlashMenu(rect);
+      const query = text.substring(slashIdx + 1).trim();
+      if (!query.includes(' ') && query.length <= 15) {
+        const rect = contentRef.current.getBoundingClientRect();
+        onOpenSlashMenu(rect, query);
+      }
     }
 
     onUpdate({ content: contentRef.current.innerHTML });
@@ -338,6 +358,131 @@ export const BlockItem: React.FC<BlockItemProps> = ({
               <CopyPlus size={13} />
               <span>Duplicate below</span>
             </button>
+            <div className="quick-menu-divider" />
+            <div className="quick-menu-section-label">Convert to</div>
+            <div className="quick-menu-convert-grid">
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'paragraph' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('paragraph');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Type size={12} />
+                <span>Text</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'heading1' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('heading1');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Heading1 size={12} />
+                <span>H1</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'heading2' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('heading2');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Heading2 size={12} />
+                <span>H2</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'heading3' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('heading3');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Heading3 size={12} />
+                <span>H3</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'todo' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('todo');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <CheckSquare size={12} />
+                <span>To-do</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'bullet' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('bullet');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <List size={12} />
+                <span>Bullet</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'numbered' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('numbered');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <ListOrdered size={12} />
+                <span>1. Numbered</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'quote' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('quote');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Quote size={12} />
+                <span>Quote</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'code' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('code');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Code2 size={12} />
+                <span>Code</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'callout' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('callout');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <AlertCircle size={12} />
+                <span>Callout</span>
+              </button>
+              <button
+                type="button"
+                className={`quick-convert-chip ${block.type === 'divider' ? 'active' : ''}`}
+                onClick={() => {
+                  onConvertType('divider');
+                  setIsMenuOpen(false);
+                }}
+              >
+                <Minus size={12} />
+                <span>Divider</span>
+              </button>
+            </div>
             <div className="quick-menu-divider" />
             <button
               className="quick-menu-item danger"

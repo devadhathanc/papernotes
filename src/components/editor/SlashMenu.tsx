@@ -92,25 +92,43 @@ const SLASH_ITEMS: SlashMenuItem[] = [
 
 interface SlashMenuProps {
   position: { top: number; left: number };
+  query?: string;
   onSelect: (type: BlockType) => void;
   onClose: () => void;
 }
 
-export const SlashMenu: React.FC<SlashMenuProps> = ({ position, onSelect, onClose }) => {
+export const SlashMenu: React.FC<SlashMenuProps> = ({ position, query = '', onSelect, onClose }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const cleanQuery = query.toLowerCase().trim();
+  const filteredItems = cleanQuery
+    ? SLASH_ITEMS.filter(
+        item =>
+          item.title.toLowerCase().includes(cleanQuery) ||
+          item.type.toLowerCase().includes(cleanQuery) ||
+          item.description.toLowerCase().includes(cleanQuery)
+      )
+    : SLASH_ITEMS;
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [cleanQuery]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (filteredItems.length === 0) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex(prev => (prev + 1) % SLASH_ITEMS.length);
+        setSelectedIndex(prev => (prev + 1) % filteredItems.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex(prev => (prev - 1 + SLASH_ITEMS.length) % SLASH_ITEMS.length);
+        setSelectedIndex(prev => (prev - 1 + filteredItems.length) % filteredItems.length);
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        onSelect(SLASH_ITEMS[selectedIndex].type);
+        if (filteredItems[selectedIndex]) {
+          onSelect(filteredItems[selectedIndex].type);
+        }
       } else if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
@@ -119,7 +137,7 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({ position, onSelect, onClos
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIndex, onSelect, onClose]);
+  }, [selectedIndex, filteredItems, onSelect, onClose]);
 
   // Adjust position so it doesn't render off-screen
   const menuTop = Math.min(position.top, window.innerHeight - 360);
@@ -132,24 +150,30 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({ position, onSelect, onClos
       style={{ top: `${menuTop}px`, left: `${menuLeft}px` }}
     >
       <div className="slash-palette-header">
-        <span>Basic blocks</span>
+        <span>{cleanQuery ? `Matching "${cleanQuery}"` : 'Basic blocks'}</span>
         <span className="slash-esc-hint">ESC</span>
       </div>
       <div className="slash-palette-items">
-        {SLASH_ITEMS.map((item, idx) => (
-          <button
-            key={item.type}
-            className={`slash-palette-item ${selectedIndex === idx ? 'active' : ''}`}
-            onClick={() => onSelect(item.type)}
-            type="button"
-          >
-            <div className="slash-item-glyph">{item.icon}</div>
-            <div className="slash-item-details">
-              <span className="slash-item-title">{item.title}</span>
-              <span className="slash-item-desc">{item.description}</span>
-            </div>
-          </button>
-        ))}
+        {filteredItems.length === 0 ? (
+          <div style={{ padding: '12px 14px', fontSize: '12px', color: 'var(--text-muted)' }}>
+            No matching blocks found
+          </div>
+        ) : (
+          filteredItems.map((item, idx) => (
+            <button
+              key={item.type}
+              className={`slash-palette-item ${selectedIndex === idx ? 'active' : ''}`}
+              onClick={() => onSelect(item.type)}
+              type="button"
+            >
+              <div className="slash-item-glyph">{item.icon}</div>
+              <div className="slash-item-details">
+                <span className="slash-item-title">{item.title}</span>
+                <span className="slash-item-desc">{item.description}</span>
+              </div>
+            </button>
+          ))
+        )}
       </div>
     </div>
   );

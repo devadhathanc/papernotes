@@ -42,9 +42,15 @@ interface NotesContextType {
   addBlock: (afterBlockId: string | null, type?: BlockType) => string;
   deleteBlock: (blockId: string) => void;
   reorderBlocks: (fromIndex: number, toIndex: number) => void;
-  convertBlockType: (blockId: string, type: BlockType) => void;
+  convertBlockType: (blockId: string, type: BlockType, newContent?: string) => void;
   toggleTodo: (blockId: string) => void;
   setFocusedBlockId: (id: string | null) => void;
+
+  // Undo / Redo History
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 
   // UI State toggles
   toggleTheme: () => void;
@@ -188,9 +194,85 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return Boolean(activeNote.isLocked && !unlockedNoteIds.includes(activeNote.id));
   }, [activeNote, unlockedNoteIds]);
 
+  // Undo / Redo History Stack
+  const undoStackRef = useRef<{ title: string; blocks: Block[] }[]>([]);
+  const redoStackRef = useRef<{ title: string; blocks: Block[] }[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingSnapshotRef = useRef<{ title: string; blocks: Block[] } | null>(null);
+
+  const pushUndoSnapshot = useCallback((title: string, blocks: Block[]) => {
+    undoStackRef.current.push({
+      title,
+      blocks: JSON.parse(JSON.stringify(blocks))
+    });
+    if (undoStackRef.current.length > 50) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+    lastTypingSnapshotRef.current = null;
+  }, []);
+
+  const undo = useCallback(() => {
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    if (lastTypingSnapshotRef.current) {
+      undoStackRef.current.push(lastTypingSnapshotRef.current);
+      lastTypingSnapshotRef.current = null;
+    }
+
+    if (undoStackRef.current.length === 0 || !activeNote) return;
+    const prevSnapshot = undoStackRef.current.pop();
+    if (!prevSnapshot) return;
+
+    redoStackRef.current.push({
+      title: activeNote.title,
+      blocks: JSON.parse(JSON.stringify(activeNote.blocks))
+    });
+
+    const now = new Date().toISOString();
+    const next = allNotes.map(n => {
+      if (n.id !== activeNote.id) return n;
+      return { ...n, title: prevSnapshot.title, blocks: prevSnapshot.blocks, updatedAt: now };
+    });
+    persistNotes(next);
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(true);
+  }, [activeNote, allNotes, persistNotes]);
+
+  const redo = useCallback(() => {
+    if (redoStackRef.current.length === 0 || !activeNote) return;
+    const nextSnapshot = redoStackRef.current.pop();
+    if (!nextSnapshot) return;
+
+    undoStackRef.current.push({
+      title: activeNote.title,
+      blocks: JSON.parse(JSON.stringify(activeNote.blocks))
+    });
+
+    const now = new Date().toISOString();
+    const next = allNotes.map(n => {
+      if (n.id !== activeNote.id) return n;
+      return { ...n, title: nextSnapshot.title, blocks: nextSnapshot.blocks, updatedAt: now };
+    });
+    persistNotes(next);
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 0);
+  }, [activeNote, allNotes, persistNotes]);
+
   const selectNote = useCallback((id: string) => {
     setActiveNoteId(id);
     storageAdapter.setActiveNoteId(id);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
+    lastTypingSnapshotRef.current = null;
   }, []);
 
   const createNote = useCallback((): Note => {
@@ -284,10 +366,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const updateNoteTitle = useCallback((title: string) => {
     if (!activeNoteId) return;
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
     const now = new Date().toISOString();
     const next = allNotes.map(n => n.id === activeNoteId ? { ...n, title, updatedAt: now } : n);
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   const updateNoteIcon = useCallback((icon: string) => {
     if (!activeNoteId) return;
@@ -318,6 +403,20 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Block updates
   const updateBlock = useCallback((blockId: string, updates: Partial<Block>) => {
     if (!activeNoteId) return;
+    if (activeNote && updates.content !== undefined) {
+      if (!lastTypingSnapshotRef.current) {
+        lastTypingSnapshotRef.current = {
+          title: activeNote.title,
+          blocks: JSON.parse(JSON.stringify(activeNote.blocks))
+        };
+      }
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => {
+        if (lastTypingSnapshotRef.current) {
+          pushUndoSnapshot(lastTypingSnapshotRef.current.title, lastTypingSnapshotRef.current.blocks);
+        }
+      }, 700);
+    }
     const now = new Date().toISOString();
     const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
@@ -325,10 +424,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { ...n, blocks: updatedBlocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   const addBlock = useCallback((afterBlockId: string | null, type: BlockType = 'paragraph'): string => {
     if (!activeNoteId) return '';
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
     const newId = generateId('b');
     const now = new Date().toISOString();
 
@@ -359,10 +461,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     persistNotes(next);
     setFocusedBlockId(newId);
     return newId;
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   const deleteBlock = useCallback((blockId: string) => {
     if (!activeNoteId) return;
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
     const now = new Date().toISOString();
 
     const next = allNotes.map(n => {
@@ -375,12 +480,15 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   // Reorder / Pan Blocks feature!
   const reorderBlocks = useCallback((fromIndex: number, toIndex: number) => {
     if (!activeNoteId) return;
     if (fromIndex === toIndex) return;
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
 
     const now = new Date().toISOString();
     const next = allNotes.map(n => {
@@ -393,10 +501,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
-  const convertBlockType = useCallback((blockId: string, type: BlockType) => {
+  const convertBlockType = useCallback((blockId: string, type: BlockType, newContent?: string) => {
     if (!activeNoteId) return;
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
     const now = new Date().toISOString();
     const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
@@ -405,6 +516,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return {
           ...b,
           type,
+          content: newContent !== undefined ? newContent : b.content,
           checked: type === 'todo' ? (b.checked ?? false) : undefined,
           calloutIcon: type === 'callout' ? (b.calloutIcon ?? 'lightbulb') : undefined,
           updatedAt: now
@@ -413,10 +525,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   const toggleTodo = useCallback((blockId: string) => {
     if (!activeNoteId) return;
+    if (activeNote) {
+      pushUndoSnapshot(activeNote.title, activeNote.blocks);
+    }
     const now = new Date().toISOString();
     const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
@@ -424,7 +539,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, allNotes, persistNotes]);
+  }, [activeNoteId, activeNote, allNotes, persistNotes, pushUndoSnapshot]);
 
   // UI state toggles
   const toggleTheme = useCallback(() => {
@@ -584,6 +699,12 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     toggleTodo,
     setFocusedBlockId,
 
+    // Undo / Redo
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+
     toggleTheme,
     toggleSidebar,
     toggleZenMode,
@@ -629,6 +750,10 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reorderBlocks,
     convertBlockType,
     toggleTodo,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
     toggleTheme,
     toggleSidebar,
     toggleZenMode,
