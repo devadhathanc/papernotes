@@ -89,7 +89,7 @@ export const Sidebar: React.FC = () => {
           <button
             className="sidebar-icon-btn"
             onClick={toggleSidebar}
-            title="Collapse sidebar (⌘\)"
+            title="Collapse sidebar (⌘ \)"
             type="button"
           >
             <PanelLeftClose size={16} />
@@ -105,7 +105,7 @@ export const Sidebar: React.FC = () => {
           >
             <Search size={14} />
             <span>Search</span>
-            <kbd className="sidebar-kbd">⌘K</kbd>
+            <kbd className="sidebar-kbd">⌘ K</kbd>
           </button>
 
           <button
@@ -115,7 +115,7 @@ export const Sidebar: React.FC = () => {
           >
             <Plus size={14} />
             <span>New page</span>
-            <kbd className="sidebar-kbd">⌘N</kbd>
+            <kbd className="sidebar-kbd">⌘ N</kbd>
           </button>
         </div>
 

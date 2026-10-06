@@ -10,7 +10,7 @@ interface PageCoverProps {
 }
 
 const COVER_STYLES: { id: CoverStyle; label: string }[] = [
-  { id: 'charcoal-mesh', label: 'Mesh' },
+  { id: 'topography', label: 'Topo' },
   { id: 'mono-grid', label: 'Grid' },
   { id: 'slate-gradient', label: 'Gradient' },
   { id: 'minimal-dots', label: 'Dots' }
@@ -18,7 +18,7 @@ const COVER_STYLES: { id: CoverStyle; label: string }[] = [
 
 export const PageCover: React.FC<PageCoverProps> = ({
   title = '',
-  style = 'charcoal-mesh',
+  style = 'topography',
   onSelectStyle,
   onUpdateTitle
 }) => {
@@ -32,15 +32,17 @@ export const PageCover: React.FC<PageCoverProps> = ({
     }
   }, [title]);
 
+  const effectiveStyle = style === 'charcoal-mesh' ? 'topography' : style;
+
   // Functional Palette: clicking cycles to next cover style
   const handleCycleStyle = () => {
-    const currentIndex = COVER_STYLES.findIndex(s => s.id === style);
+    const currentIndex = COVER_STYLES.findIndex(s => s.id === effectiveStyle);
     const nextIndex = (currentIndex + 1) % COVER_STYLES.length;
     onSelectStyle(COVER_STYLES[nextIndex].id);
   };
 
   return (
-    <div className={`page-cover-banner cover-style-${style}`}>
+    <div className={`page-cover-banner cover-style-${effectiveStyle}`}>
       <div className="cover-overlay-pattern" />
 
       {/* Top Row: Pattern controls with functional Palette cycle button & pills */}
@@ -51,7 +53,7 @@ export const PageCover: React.FC<PageCoverProps> = ({
               className="cover-palette-btn"
               onClick={handleCycleStyle}
               type="button"
-              title="Cycle cover pattern (Mesh, Grid, Gradient, Dots)"
+              title="Cycle cover pattern (Topo, Grid, Gradient, Dots)"
               aria-label="Cycle cover pattern"
             >
               <Palette size={13} />
@@ -59,7 +61,7 @@ export const PageCover: React.FC<PageCoverProps> = ({
             {COVER_STYLES.map(s => (
               <button
                 key={s.id}
-                className={`cover-style-pill ${style === s.id ? 'active' : ''}`}
+                className={`cover-style-pill ${effectiveStyle === s.id ? 'active' : ''}`}
                 onClick={() => onSelectStyle(s.id)}
                 type="button"
               >

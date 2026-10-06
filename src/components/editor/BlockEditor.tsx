@@ -71,31 +71,45 @@ export const BlockEditor: React.FC = () => {
 
         {/* Blocks Canvas */}
         <div className="blocks-canvas">
-          {activeNote.blocks.map((block, idx) => (
-            <BlockItem
-              key={block.id}
-              block={block}
-              index={idx}
-              totalBlocks={activeNote.blocks.length}
-              isFocused={focusedBlockId === block.id}
-              onUpdate={updates => updateBlock(block.id, updates)}
-              onAddBelow={type => addBlock(block.id, type)}
-              onDelete={() => deleteBlock(block.id)}
-              onReorder={reorderBlocks}
-              onConvertType={type => convertBlockType(block.id, type)}
-              onOpenSlashMenu={rect => handleOpenSlashMenu(block.id, rect)}
-              onFocusNext={() => {
-                if (idx < activeNote.blocks.length - 1) {
-                  setFocusedBlockId(activeNote.blocks[idx + 1].id);
+          {activeNote.blocks.map((block, idx) => {
+            let listNumber = 1;
+            if (block.type === 'numbered') {
+              for (let i = idx - 1; i >= 0; i--) {
+                if (activeNote.blocks[i].type === 'numbered') {
+                  listNumber++;
+                } else {
+                  break;
                 }
-              }}
-              onFocusPrev={() => {
-                if (idx > 0) {
-                  setFocusedBlockId(activeNote.blocks[idx - 1].id);
-                }
-              }}
-            />
-          ))}
+              }
+            }
+
+            return (
+              <BlockItem
+                key={block.id}
+                block={block}
+                index={idx}
+                totalBlocks={activeNote.blocks.length}
+                listNumber={listNumber}
+                isFocused={focusedBlockId === block.id}
+                onUpdate={updates => updateBlock(block.id, updates)}
+                onAddBelow={type => addBlock(block.id, type)}
+                onDelete={() => deleteBlock(block.id)}
+                onReorder={reorderBlocks}
+                onConvertType={type => convertBlockType(block.id, type)}
+                onOpenSlashMenu={rect => handleOpenSlashMenu(block.id, rect)}
+                onFocusNext={() => {
+                  if (idx < activeNote.blocks.length - 1) {
+                    setFocusedBlockId(activeNote.blocks[idx + 1].id);
+                  }
+                }}
+                onFocusPrev={() => {
+                  if (idx > 0) {
+                    setFocusedBlockId(activeNote.blocks[idx - 1].id);
+                  }
+                }}
+              />
+            );
+          })}
         </div>
 
         {/* Bottom Clickable Area to append block */}

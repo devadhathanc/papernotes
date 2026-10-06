@@ -8,15 +8,20 @@ const STORAGE_KEY_CLOUD = '@papernotes_cloud_config_v1';
 
 // In-memory fallback if AsyncStorage native module is unavailable
 const memoryCache = new Map<string, string>();
+let isNativeStorageFunctional: boolean | null = null;
 
 async function safeGetItem(key: string): Promise<string | null> {
-  try {
-    if (AsyncStorage && typeof AsyncStorage.getItem === 'function') {
-      const val = await AsyncStorage.getItem(key);
-      if (val !== null) return val;
+  if (isNativeStorageFunctional !== false) {
+    try {
+      if (AsyncStorage && typeof AsyncStorage.getItem === 'function') {
+        const val = await AsyncStorage.getItem(key);
+        isNativeStorageFunctional = true;
+        if (val !== null) return val;
+      }
+    } catch {
+      // Disable calling AsyncStorage again to avoid repeated error logs
+      isNativeStorageFunctional = false;
     }
-  } catch (e) {
-    // Native module unavailable or error
   }
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
@@ -29,13 +34,16 @@ async function safeGetItem(key: string): Promise<string | null> {
 
 async function safeSetItem(key: string, value: string): Promise<void> {
   memoryCache.set(key, value);
-  try {
-    if (AsyncStorage && typeof AsyncStorage.setItem === 'function') {
-      await AsyncStorage.setItem(key, value);
-      return;
+  if (isNativeStorageFunctional !== false) {
+    try {
+      if (AsyncStorage && typeof AsyncStorage.setItem === 'function') {
+        await AsyncStorage.setItem(key, value);
+        isNativeStorageFunctional = true;
+        return;
+      }
+    } catch {
+      isNativeStorageFunctional = false;
     }
-  } catch (e) {
-    // Native module unavailable
   }
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
@@ -50,7 +58,7 @@ export const MOBILE_STARTER_NOTES: Note[] = [
     title: 'Welcome to PaperNotes Mobile',
     icon: 'zap',
     hasCover: true,
-    coverStyle: 'charcoal-mesh',
+    coverStyle: 'topography',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     version: 1,
@@ -174,6 +182,23 @@ export class AsyncStorageAdapter {
       await safeSetItem(STORAGE_KEY_CLOUD, JSON.stringify(config));
     } catch (e) {
       console.warn('AsyncStorageAdapter: failed to save cloud config', e);
+    }
+  }
+
+  async getSecurityPin(): Promise<string> {
+    try {
+      const pin = await safeGetItem('@papernotes_security_pin');
+      return pin || '123';
+    } catch {
+      return '123';
+    }
+  }
+
+  async saveSecurityPin(pin: string): Promise<void> {
+    try {
+      await safeSetItem('@papernotes_security_pin', pin);
+    } catch (e) {
+      console.warn('AsyncStorageAdapter: failed to save security pin', e);
     }
   }
 }

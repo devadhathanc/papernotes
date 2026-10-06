@@ -12,7 +12,7 @@ export const STARTER_NOTES: Note[] = [
     title: 'Welcome to PaperNotes',
     icon: 'zap',
     hasCover: true,
-    coverStyle: 'charcoal-mesh',
+    coverStyle: 'topography',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     version: 1,
@@ -57,7 +57,7 @@ export const STARTER_NOTES: Note[] = [
       {
         id: 'b-6',
         type: 'todo',
-        content: 'Press <code>⌘K</code> (or Ctrl+K) to instantly search through all your pages',
+        content: 'Press <code>⌘ K</code> (or Ctrl+K) to instantly search through all your pages',
         checked: true,
         order: 5,
         updatedAt: new Date().toISOString()

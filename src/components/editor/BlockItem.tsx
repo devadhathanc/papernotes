@@ -17,6 +17,7 @@ interface BlockItemProps {
   block: Block;
   index: number;
   totalBlocks: number;
+  listNumber?: number;
   isFocused: boolean;
   onUpdate: (updates: Partial<Block>) => void;
   onAddBelow: (type?: BlockType) => void;
@@ -28,10 +29,13 @@ interface BlockItemProps {
   onFocusPrev: () => void;
 }
 
+let activeDraggedIndex: number | null = null;
+
 export const BlockItem: React.FC<BlockItemProps> = ({
   block,
   index,
   totalBlocks,
+  listNumber,
   isFocused,
   onUpdate,
   onAddBelow,
@@ -42,6 +46,7 @@ export const BlockItem: React.FC<BlockItemProps> = ({
   onFocusNext,
   onFocusPrev
 }) => {
+  const rowRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [isCopied, setIsCopied] = useState(false);
@@ -105,8 +110,8 @@ export const BlockItem: React.FC<BlockItemProps> = ({
       onConvertType('bullet');
       return;
     }
-    if (/^1\.\s/.test(text)) {
-      contentRef.current.innerHTML = text.substring(3);
+    if (/^\d+\.\s/.test(text)) {
+      contentRef.current.innerHTML = text.replace(/^\d+\.\s/, '');
       onConvertType('numbered');
       return;
     }
@@ -175,12 +180,23 @@ export const BlockItem: React.FC<BlockItemProps> = ({
 
   // Drag and drop / Pan reordering
   const handleDragStart = (e: React.DragEvent) => {
+    activeDraggedIndex = index;
     e.dataTransfer.setData('text/plain', String(index));
     e.dataTransfer.effectAllowed = 'move';
-    setIsDragging(true);
+
+    // Use the block component's natural UI directly
+    if (rowRef.current && e.dataTransfer.setDragImage) {
+      const rect = rowRef.current.getBoundingClientRect();
+      e.dataTransfer.setDragImage(rowRef.current, 12, Math.min(18, rect.height / 2));
+    }
+
+    requestAnimationFrame(() => {
+      setIsDragging(true);
+    });
   };
 
   const handleDragEnd = () => {
+    activeDraggedIndex = null;
     setIsDragging(false);
     setIsDragOver(false);
   };
@@ -191,18 +207,27 @@ export const BlockItem: React.FC<BlockItemProps> = ({
     if (!isDragOver) setIsDragOver(true);
   };
 
-  const handleDragLeave = () => {
-    setIsDragOver(false);
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear drag over if leaving the entire block row container (including left space)
+    if (rowRef.current && !rowRef.current.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(false);
     setIsDragging(false);
-    const fromIdxStr = e.dataTransfer.getData('text/plain');
-    if (!fromIdxStr) return;
-    const fromIdx = parseInt(fromIdxStr, 10);
-    if (!isNaN(fromIdx) && fromIdx !== index) {
+
+    let fromIdx = activeDraggedIndex;
+    if (fromIdx === null) {
+      const fromIdxStr = e.dataTransfer.getData('text/plain');
+      if (fromIdxStr) fromIdx = parseInt(fromIdxStr, 10);
+    }
+    activeDraggedIndex = null;
+
+    if (typeof fromIdx === 'number' && !isNaN(fromIdx) && fromIdx !== index) {
       onReorder(fromIdx, index);
     }
   };
@@ -232,11 +257,21 @@ export const BlockItem: React.FC<BlockItemProps> = ({
 
   return (
     <div
+      ref={rowRef}
       className={`editor-block-row ${block.type} ${block.checked ? 'completed' : ''} ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'is-drag-over' : ''} ${isMenuOpen ? 'is-menu-open' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Left Catchment Drop Zone: enables drag-and-drop on the left space of each component */}
+      <div
+        className="block-left-catchment"
+        contentEditable={false}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      />
+
       {/* Pan & Drag Handle Gutter */}
       <div className={`block-gutter ${isMenuOpen ? 'is-menu-open' : ''}`} contentEditable={false}>
         <button
@@ -247,17 +282,18 @@ export const BlockItem: React.FC<BlockItemProps> = ({
         >
           <Plus size={13} />
         </button>
-        <button
+        <div
+          role="button"
+          tabIndex={0}
           className="gutter-btn drag-handle"
           title="Drag to pan / reorder"
-          draggable
+          draggable={true}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
-          type="button"
           aria-label="Drag to reorder"
         >
           <GripVertical size={13} />
-        </button>
+        </div>
         <button
           className="gutter-btn options-btn"
           title="Block options"
@@ -327,6 +363,20 @@ export const BlockItem: React.FC<BlockItemProps> = ({
         >
           {block.checked && <Check size={11} strokeWidth={3} />}
         </button>
+      )}
+
+      {/* Bullet Point */}
+      {block.type === 'bullet' && (
+        <span className="bullet-prefix" contentEditable={false} aria-hidden="true">
+          •
+        </span>
+      )}
+
+      {/* Numbered List Prefix */}
+      {block.type === 'numbered' && (
+        <span className="numbered-prefix" contentEditable={false} aria-hidden="true">
+          {listNumber || 1}.
+        </span>
       )}
 
       {/* Callout Icon */}

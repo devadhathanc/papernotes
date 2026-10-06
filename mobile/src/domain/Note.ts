@@ -21,7 +21,7 @@ export interface Block {
   updatedAt: string;
 }
 
-export type CoverStyle = 'charcoal-mesh' | 'mono-grid' | 'slate-gradient' | 'minimal-dots';
+export type CoverStyle = 'topography' | 'mono-grid' | 'slate-gradient' | 'minimal-dots' | 'charcoal-mesh';
 
 export interface Note {
   id: string;
@@ -34,4 +34,5 @@ export interface Note {
   updatedAt: string;
   isDeleted?: boolean;
   version?: number;
+  isLocked?: boolean;
 }

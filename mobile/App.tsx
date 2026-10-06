@@ -14,8 +14,11 @@ import {
   TouchableWithoutFeedback,
   Keyboard
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, Pattern, Rect, Path, Circle } from 'react-native-svg';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Feather } from '@expo/vector-icons';
+import * as LocalAuthentication from 'expo-local-authentication';
 import type { Note, Block, BlockType, CoverStyle } from './src/domain/Note';
 import type { SyncState, CloudConfig, SyncStats } from './src/domain/Sync';
 import { AsyncStorageAdapter } from './src/services/storage/AsyncStorageAdapter';
@@ -29,7 +32,7 @@ function generateId(prefix = 'b'): string {
 }
 
 const COVER_PATTERNS: { id: CoverStyle; label: string }[] = [
-  { id: 'charcoal-mesh', label: 'Mesh' },
+  { id: 'topography', label: 'Topo' },
   { id: 'mono-grid', label: 'Grid' },
   { id: 'slate-gradient', label: 'Gradient' },
   { id: 'minimal-dots', label: 'Dots' }
@@ -46,9 +49,126 @@ const AVAILABLE_PAGE_ICONS = [
   'code',
   'check-circle',
   'compass'
-] as const;
+];
 
-export default function App() {
+function CoverPatternBackground({
+  style,
+  isDark
+}: {
+  style: CoverStyle;
+  isDark: boolean;
+}) {
+  if (style === 'mono-grid') {
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: isDark ? '#121214' : '#fafafa' }
+          ]}
+        />
+        <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+          <Defs>
+            <Pattern
+              id="mobileGridPattern"
+              width="24"
+              height="24"
+              patternUnits="userSpaceOnUse"
+            >
+              <Path
+                d="M 24 0 L 0 0 0 24"
+                fill="none"
+                stroke={isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'}
+                strokeWidth="1"
+              />
+            </Pattern>
+          </Defs>
+          <Rect width="100%" height="100%" fill="url(#mobileGridPattern)" />
+        </Svg>
+      </View>
+    );
+  }
+
+  if (style === 'slate-gradient') {
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <LinearGradient
+          colors={
+            isDark
+              ? ['#25252b', '#161619', '#09090b']
+              : ['#f4f4f6', '#eaecee', '#ffffff']
+          }
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
+    );
+  }
+
+  if (style === 'minimal-dots') {
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: isDark ? '#101012' : '#f9f9fb' }
+          ]}
+        />
+        <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+          <Defs>
+            <Pattern
+              id="mobileDotsPattern"
+              width="18"
+              height="18"
+              patternUnits="userSpaceOnUse"
+            >
+              <Circle
+                cx="3"
+                cy="3"
+                r="1.2"
+                fill={isDark ? 'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.18)'}
+              />
+            </Pattern>
+          </Defs>
+          <Rect width="100%" height="100%" fill="url(#mobileDotsPattern)" />
+        </Svg>
+      </View>
+    );
+  }
+
+  // Default: 'topography' / 'charcoal-mesh' (authentic organic contour map lines)
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          { backgroundColor: isDark ? '#121215' : '#f7f7f9' }
+        ]}
+      />
+      <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+        <Defs>
+          <Pattern
+            id="mobileTopoPattern"
+            width="240"
+            height="240"
+            patternUnits="userSpaceOnUse"
+          >
+            <Path
+              d="M-20 40 C40 10 90 80 150 40 C210 10 240 70 300 40 M-20 80 C50 45 100 120 160 80 C220 50 250 110 300 80 M-20 120 C40 90 90 160 150 120 C210 90 240 150 300 120 M-20 160 C50 130 110 200 170 160 C230 130 250 190 300 160 M-20 200 C30 170 80 240 140 200 C200 170 240 230 300 200 M-20 0 C40 -30 90 40 150 0 C210 -30 240 30 300 0"
+              fill="none"
+              stroke={isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0, 0, 0, 0.12)'}
+              strokeWidth="1.2"
+            />
+          </Pattern>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#mobileTopoPattern)" />
+      </Svg>
+    </View>
+  );
+}
+
+function MainAppContent() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -67,12 +187,58 @@ export default function App() {
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Security PIN & Biometrics Page Locking
+  const [securityPin, setSecurityPin] = useState('123');
+  const [unlockedNoteIds, setUnlockedNoteIds] = useState<string[]>([]);
+  const [enteredPin, setEnteredPin] = useState('');
+  const [pinError, setPinError] = useState(false);
+  const [isPinSetupOpen, setIsPinSetupOpen] = useState(false);
+  const [newPinInput, setNewPinInput] = useState('');
+  const [hasBiometrics, setHasBiometrics] = useState(false);
+
   // Cloud credentials form
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [isTestingCloud, setIsTestingCloud] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ScrollView & Keyboard positioning
+  const scrollViewRef = useRef<ScrollView>(null);
+  const blockPositions = useRef<{ [id: string]: number }>({});
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  const scrollToBlock = useCallback((blockId: string) => {
+    setTimeout(() => {
+      const y = blockPositions.current[blockId];
+      if (typeof y === 'number' && scrollViewRef.current) {
+        scrollViewRef.current.scrollTo({
+          y: Math.max(0, y - 80),
+          animated: true
+        });
+      }
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showListener = Keyboard.addListener(showEvent, e => {
+      setKeyboardHeight(e.endCoordinates.height);
+      if (selectedBlockId) {
+        scrollToBlock(selectedBlockId);
+      }
+    });
+    const hideListener = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showListener.remove();
+      hideListener.remove();
+    };
+  }, [selectedBlockId, scrollToBlock]);
 
   // Load notes on mount
   useEffect(() => {
@@ -86,7 +252,7 @@ export default function App() {
         setActiveNoteId(loaded[0].id);
       }
 
-      const cfg = await storage.getCloudConfig();
+       const cfg = await storage.getCloudConfig();
       if (cfg) {
         setSupabaseUrl(cfg.supabaseUrl || '');
         setSupabaseAnonKey(cfg.supabaseAnonKey || '');
@@ -95,6 +261,17 @@ export default function App() {
           const synced = await syncManager.sync();
           setNotes(synced);
         }
+      }
+
+      const savedPin = await storage.getSecurityPin();
+      setSecurityPin(savedPin);
+
+      try {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        setHasBiometrics(hasHardware && isEnrolled);
+      } catch {
+        setHasBiometrics(false);
       }
     }
     init();
@@ -117,6 +294,112 @@ export default function App() {
   const activeNote = useMemo(() => {
     return notes.find(n => n.id === activeNoteId) || null;
   }, [notes, activeNoteId]);
+
+  const unlockWithBiometrics = useCallback(async (targetNoteId?: string) => {
+    const idToUnlock = targetNoteId || activeNoteId;
+    if (!idToUnlock) return false;
+
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Unlock PaperNotes Document',
+        fallbackLabel: 'Use 3-Digit PIN',
+        cancelLabel: 'Cancel'
+      });
+
+      if (result.success) {
+        setUnlockedNoteIds(prev => (prev.includes(idToUnlock) ? prev : [...prev, idToUnlock]));
+        setEnteredPin('');
+        setPinError(false);
+        return true;
+      }
+    } catch (e) {
+      console.warn('Biometric unlock failed', e);
+    }
+    return false;
+  }, [activeNoteId]);
+
+  // Prompt fingerprint automatically when opening a locked note
+  useEffect(() => {
+    if (activeNote && activeNote.isLocked && !unlockedNoteIds.includes(activeNote.id)) {
+      setEnteredPin('');
+      setPinError(false);
+      unlockWithBiometrics(activeNote.id);
+    }
+  }, [activeNoteId, activeNote?.isLocked, unlockedNoteIds, unlockWithBiometrics]);
+
+  const handleKeypadPress = (digit: string) => {
+    if (!activeNote) return;
+    if (enteredPin.length >= 3) return;
+    const next = enteredPin + digit;
+    setEnteredPin(next);
+
+    if (next.length === 3) {
+      if (next === securityPin) {
+        setUnlockedNoteIds(prev => (prev.includes(activeNote.id) ? prev : [...prev, activeNote.id]));
+        setEnteredPin('');
+        setPinError(false);
+      } else {
+        setPinError(true);
+        setTimeout(() => {
+          setEnteredPin('');
+          setPinError(false);
+        }, 500);
+      }
+    }
+  };
+
+  const handleKeypadDelete = () => {
+    setEnteredPin(p => p.slice(0, -1));
+    setPinError(false);
+  };
+
+  const toggleLockActiveNote = async () => {
+    if (!activeNote || !activeNoteId) return;
+    const willLock = !activeNote.isLocked;
+
+    if (!willLock) {
+      let ok = false;
+      try {
+        ok = await unlockWithBiometrics(activeNoteId);
+      } catch {}
+
+      if (!ok) {
+        Alert.alert(
+          'Protected Document',
+          'To remove page lock, enter your PIN on the screen or authenticate.'
+        );
+        return;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const next = notes.map(n => (n.id === activeNoteId ? { ...n, isLocked: willLock, updatedAt: now } : n));
+    persistNotes(next);
+
+    if (willLock) {
+      setUnlockedNoteIds(prev => prev.filter(id => id !== activeNoteId));
+      Alert.alert('🔒 Page Locked', 'This page is now locked. Unlock it anytime with your 3-digit PIN or fingerprint.');
+    } else {
+      Alert.alert('🔓 Page Unlocked', 'Lock protection has been removed from this page.');
+    }
+  };
+
+  const relockActiveNote = () => {
+    if (!activeNoteId) return;
+    setUnlockedNoteIds(prev => prev.filter(id => id !== activeNoteId));
+  };
+
+  const saveCustomPin = async () => {
+    if (newPinInput.length !== 3 || !/^\d{3}$/.test(newPinInput)) {
+      Alert.alert('Invalid PIN', 'Please enter exactly 3 digits (e.g. 123).');
+      return;
+    }
+    await storage.saveSecurityPin(newPinInput);
+    setSecurityPin(newPinInput);
+    setNewPinInput('');
+    setIsPinSetupOpen(false);
+    Alert.alert('PIN Updated', 'Your 3-digit security PIN has been updated successfully!');
+  };
 
   const selectNote = (id: string) => {
     setActiveNoteId(id);
@@ -179,9 +462,44 @@ export default function App() {
   const updateBlockContent = (blockId: string, content: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
+
+    let targetType: BlockType | undefined;
+    let newContent = content;
+
+    if (/^\d+\.\s/.test(content)) {
+      targetType = 'numbered';
+      newContent = content.replace(/^\d+\.\s/, '');
+    } else if (content.startsWith('- ') || content.startsWith('* ')) {
+      targetType = 'bullet';
+      newContent = content.substring(2);
+    } else if (content.startsWith('# ')) {
+      targetType = 'heading1';
+      newContent = content.substring(2);
+    } else if (content.startsWith('## ')) {
+      targetType = 'heading2';
+      newContent = content.substring(3);
+    } else if (content.startsWith('### ')) {
+      targetType = 'heading3';
+      newContent = content.substring(4);
+    } else if (content.startsWith('[] ') || content.startsWith('[ ] ')) {
+      targetType = 'todo';
+      newContent = content.replace(/^\[\s?\]\s/, '');
+    } else if (content.startsWith('> ')) {
+      targetType = 'quote';
+      newContent = content.substring(2);
+    }
+
     const next = notes.map(n => {
       if (n.id !== activeNoteId) return n;
-      const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, content, updatedAt: now } : b));
+      const blocks = n.blocks.map(b => {
+        if (b.id !== blockId) return b;
+        return {
+          ...b,
+          content: newContent,
+          type: targetType || b.type,
+          updatedAt: now
+        };
+      });
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
@@ -300,10 +618,10 @@ export default function App() {
     setBlockMenuBlockId(null);
   };
 
-  // Functional Palette: Cycle cover pattern (Mesh -> Grid -> Gradient -> Dots)
+  // Functional Palette: Cycle cover pattern (Topo -> Grid -> Gradient -> Dots)
   const cycleCoverPattern = () => {
     if (!activeNote || !activeNoteId) return;
-    const current = activeNote.coverStyle || 'charcoal-mesh';
+    const current = activeNote.coverStyle === 'charcoal-mesh' ? 'topography' : (activeNote.coverStyle || 'topography');
     const currentIndex = COVER_PATTERNS.findIndex(p => p.id === current);
     const nextIndex = (currentIndex + 1) % COVER_PATTERNS.length;
     changeCoverStyle(COVER_PATTERNS[nextIndex].id);
@@ -362,10 +680,11 @@ export default function App() {
 
   const activeBlockIndex = activeNote?.blocks.findIndex(b => b.id === (blockMenuBlockId || selectedBlockId)) ?? -1;
 
+  const insets = useSafeAreaInsets();
+
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={[styles.container, { backgroundColor: colors.bgApp }]} edges={['top', 'left', 'right']}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+    <View style={[styles.container, { backgroundColor: colors.bgApp, paddingTop: insets.top }]}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
         {/* Top Header Bar */}
         <View style={[styles.header, { borderBottomColor: colors.border }]}>
@@ -400,6 +719,29 @@ export default function App() {
               />
             </TouchableOpacity>
 
+            {/* Lock / Protect Page Button */}
+            {activeNote && (
+              <TouchableOpacity
+                style={[
+                  styles.iconBtn,
+                  { backgroundColor: colors.bgCard, borderColor: colors.border },
+                  activeNote.isLocked && { borderColor: '#ef4444' }
+                ]}
+                onPress={
+                  activeNote.isLocked && unlockedNoteIds.includes(activeNote.id)
+                    ? relockActiveNote
+                    : toggleLockActiveNote
+                }
+                onLongPress={toggleLockActiveNote}
+              >
+                <Feather
+                  name={activeNote.isLocked ? (unlockedNoteIds.includes(activeNote.id) ? 'unlock' : 'lock') : 'lock'}
+                  size={15}
+                  color={activeNote.isLocked ? '#ef4444' : colors.textMuted}
+                />
+              </TouchableOpacity>
+            )}
+
             {/* Icon-Only Theme Toggle */}
             <TouchableOpacity
               style={[styles.iconBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
@@ -418,8 +760,97 @@ export default function App() {
           </View>
         </View>
 
-        {/* Main Document Scroll View */}
-        <KeyboardAvoidingView
+        {/* Protected Document Locked Screen or Main Editor */}
+        {activeNote && activeNote.isLocked && !unlockedNoteIds.includes(activeNote.id) ? (
+          <View style={[styles.lockedScreenContainer, { backgroundColor: colors.bgApp }]}>
+            <View style={[styles.lockCardBadge, { backgroundColor: colors.bgSubtle, borderColor: colors.border }]}>
+              <Feather name="lock" size={30} color={colors.textMain} />
+            </View>
+
+            <Text style={[styles.lockedScreenTitle, { color: colors.textMain }]}>Protected Document</Text>
+            <Text style={[styles.lockedScreenSub, { color: colors.textMuted }]}>
+              {activeNote.title.trim() || 'Untitled Document'}
+            </Text>
+
+            {/* 3-Digit PIN Indicator Dots */}
+            <View style={styles.pinDotsRow}>
+              {[0, 1, 2].map(i => (
+                <View
+                  key={i}
+                  style={[
+                    styles.pinDot,
+                    { borderColor: pinError ? '#ef4444' : colors.contrast },
+                    enteredPin.length > i && {
+                      backgroundColor: pinError ? '#ef4444' : colors.contrast
+                    }
+                  ]}
+                />
+              ))}
+            </View>
+
+            {pinError ? (
+              <Text style={styles.pinErrorText}>Incorrect PIN. Try again.</Text>
+            ) : (
+              <Text style={[styles.pinPromptText, { color: colors.textMuted }]}>
+                Enter 3-digit PIN or use fingerprint
+              </Text>
+            )}
+
+            {/* Fingerprint Button */}
+            <TouchableOpacity
+              style={[styles.fingerprintBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+              onPress={() => unlockWithBiometrics()}
+            >
+              <Feather name="shield" size={16} color={colors.textMain} />
+              <Text style={[styles.fingerprintBtnText, { color: colors.textMain }]}>
+                Unlock with Fingerprint
+              </Text>
+            </TouchableOpacity>
+
+            {/* 3-Digit Numeric Keypad */}
+            <View style={styles.keypadGrid}>
+              {[
+                ['1', '2', '3'],
+                ['4', '5', '6'],
+                ['7', '8', '9'],
+                ['Clear', '0', '⌫']
+              ].map((row, rIdx) => (
+                <View key={rIdx} style={styles.keypadRow}>
+                  {row.map(val => (
+                    <TouchableOpacity
+                      key={val}
+                      style={[
+                        styles.keypadKey,
+                        { backgroundColor: colors.bgCard, borderColor: colors.border },
+                        (val === 'Clear' || val === '⌫') && { borderColor: 'transparent', backgroundColor: 'transparent' }
+                      ]}
+                      onPress={() => {
+                        if (val === 'Clear') setEnteredPin('');
+                        else if (val === '⌫') handleKeypadDelete();
+                        else handleKeypadPress(val);
+                      }}
+                    >
+                      {val === '⌫' ? (
+                        <Feather name="delete" size={18} color={colors.textMain} />
+                      ) : (
+                        <Text
+                          style={[
+                            styles.keypadKeyText,
+                            { color: colors.textMain },
+                            val === 'Clear' && { fontSize: 13, color: colors.textMuted }
+                          ]}
+                        >
+                          {val}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : (
+          <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
@@ -427,23 +858,26 @@ export default function App() {
           {activeNote ? (
             <TouchableWithoutFeedback onPress={() => setSelectedBlockId(null)}>
               <ScrollView
+                ref={scrollViewRef}
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                automaticallyAdjustKeyboardInsets={true}
               >
                 {/* Flexible Cover Banner with Title INSIDE Cover */}
                 <View
                   style={[
                     styles.coverBanner,
-                    activeNote.coverStyle === 'mono-grid'
-                      ? { backgroundColor: colors.coverGrid, borderColor: colors.border }
-                      : activeNote.coverStyle === 'slate-gradient'
-                      ? { backgroundColor: colors.coverGradient, borderColor: colors.border }
-                      : activeNote.coverStyle === 'minimal-dots'
-                      ? { backgroundColor: colors.coverDots, borderColor: colors.border }
-                      : { backgroundColor: colors.coverMesh, borderColor: colors.border }
+                    { borderColor: colors.border }
                   ]}
                 >
+                  {/* Dynamic Pattern / Filter Background */}
+                  <CoverPatternBackground
+                    style={activeNote.coverStyle || 'charcoal-mesh'}
+                    isDark={isDark}
+                  />
+
                   {/* Top-Right Cover Action Bar: Functional Palette Button + Pills */}
                   <View style={styles.coverTopBar}>
                     <View style={styles.coverPillsRow}>
@@ -455,36 +889,50 @@ export default function App() {
                         <Feather name="sliders" size={13} color="#ffffff" />
                       </TouchableOpacity>
 
-                      {COVER_PATTERNS.map(p => (
-                        <TouchableOpacity
-                          key={p.id}
-                          onPress={() => changeCoverStyle(p.id)}
-                          style={[
-                            styles.coverPill,
-                            (activeNote.coverStyle || 'charcoal-mesh') === p.id && styles.coverPillActive
-                          ]}
-                        >
-                          <Text
+                      {COVER_PATTERNS.map(p => {
+                        const currentStyle = activeNote.coverStyle === 'charcoal-mesh' ? 'topography' : (activeNote.coverStyle || 'topography');
+                        const isPillActive = currentStyle === p.id;
+                        return (
+                          <TouchableOpacity
+                            key={p.id}
+                            onPress={() => changeCoverStyle(p.id)}
                             style={[
-                              styles.coverPillText,
-                              (activeNote.coverStyle || 'charcoal-mesh') === p.id && styles.coverPillTextActive
+                              styles.coverPill,
+                              isPillActive && styles.coverPillActive
                             ]}
                           >
-                            {p.label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
+                            <Text
+                              style={[
+                                styles.coverPillText,
+                                isPillActive && styles.coverPillTextActive
+                              ]}
+                            >
+                              {p.label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
                   </View>
 
                   {/* Page Title Directly On Cover (Same size 32px & bold, flexible height) */}
                   <View style={styles.coverTitleWrapper}>
                     <TextInput
-                      style={styles.coverTitleInput}
+                      style={[
+                        styles.coverTitleInput,
+                        {
+                          color: isDark ? '#ffffff' : '#111113',
+                          textShadowColor: isDark ? 'rgba(0, 0, 0, 0.85)' : 'rgba(255, 255, 255, 0.7)'
+                        }
+                      ]}
                       value={activeNote.title}
                       onChangeText={updateTitle}
+                      onFocus={() => {
+                        setSelectedBlockId(null);
+                        scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+                      }}
                       placeholder="Untitled Note"
-                      placeholderTextColor="rgba(255, 255, 255, 0.45)"
+                      placeholderTextColor={isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.4)'}
                       multiline
                       scrollEnabled={false}
                     />
@@ -512,7 +960,13 @@ export default function App() {
                     const isSelected = selectedBlockId === block.id;
 
                     return (
-                      <View key={block.id} style={styles.blockWrapper}>
+                      <View
+                        key={block.id}
+                        style={styles.blockWrapper}
+                        onLayout={e => {
+                          blockPositions.current[block.id] = e.nativeEvent.layout.y;
+                        }}
+                      >
                         {/* Overlay Toolbar pinned to Top-Left on clicking the component */}
                         {isSelected && (
                           <View style={[styles.blockOverlayToolbar, { backgroundColor: colors.contrast }]}>
@@ -588,6 +1042,25 @@ export default function App() {
                               <Text style={[styles.bulletDot, { color: colors.textSecondary }]}>•</Text>
                             )}
 
+                            {/* Numbered List Prefix */}
+                            {block.type === 'numbered' && (
+                              <Text style={[styles.numberedPrefix, { color: colors.textSecondary }]}>
+                                {(() => {
+                                  let num = 1;
+                                  if (activeNote) {
+                                    for (let i = idx - 1; i >= 0; i--) {
+                                      if (activeNote.blocks[i]?.type === 'numbered') {
+                                        num++;
+                                      } else {
+                                        break;
+                                      }
+                                    }
+                                  }
+                                  return `${num}.`;
+                                })()}
+                              </Text>
+                            )}
+
                             {/* Quote Border */}
                             {block.type === 'quote' && (
                               <View style={[styles.quoteBar, { backgroundColor: colors.contrast }]} />
@@ -613,8 +1086,24 @@ export default function App() {
                                 block.checked && styles.completedText
                               ]}
                               value={block.content}
-                              onChangeText={txt => updateBlockContent(block.id, txt)}
-                              onFocus={() => setSelectedBlockId(block.id)}
+                              onChangeText={txt => {
+                                if ((block.type === 'bullet' || block.type === 'numbered' || block.type === 'todo') && txt.includes('\n')) {
+                                  const parts = txt.split('\n');
+                                  const firstPart = parts[0];
+                                  if (firstPart.trim() === '') {
+                                    convertBlockType(block.id, 'paragraph');
+                                    return;
+                                  }
+                                  updateBlockContent(block.id, firstPart);
+                                  addBlockBelow(block.id, block.type);
+                                  return;
+                                }
+                                updateBlockContent(block.id, txt);
+                              }}
+                              onFocus={() => {
+                                setSelectedBlockId(block.id);
+                                scrollToBlock(block.id);
+                              }}
                               placeholder={
                                 block.type === 'heading1'
                                   ? 'Heading 1'
@@ -622,6 +1111,10 @@ export default function App() {
                                   ? 'Heading 2'
                                   : block.type === 'heading3'
                                   ? 'Heading 3'
+                                  : block.type === 'numbered'
+                                  ? 'List item'
+                                  : block.type === 'bullet'
+                                  ? 'List item'
                                   : 'Type content...'
                               }
                               placeholderTextColor={colors.textMuted}
@@ -643,7 +1136,7 @@ export default function App() {
                   <Text style={[styles.addBlockTriggerText, { color: colors.textSecondary }]}>Add block</Text>
                 </TouchableOpacity>
 
-                <View style={{ height: 100 }} />
+                <View style={{ height: keyboardHeight > 0 ? keyboardHeight + 120 : 120 }} />
               </ScrollView>
             </TouchableWithoutFeedback>
           ) : (
@@ -697,6 +1190,14 @@ export default function App() {
 
                 <TouchableOpacity
                   style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
+                  onPress={() => addBlockBelow(selectedBlockId, 'numbered')}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textMain, marginRight: 2 }}>1.</Text>
+                  <Text style={[styles.accessoryChipText, { color: colors.textMain }]}>Numbered</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.accessoryChip, { backgroundColor: colors.bgSubtle }]}
                   onPress={() => addBlockBelow(selectedBlockId, 'callout')}
                 >
                   <Feather name="info" size={13} color={colors.textMain} />
@@ -722,6 +1223,7 @@ export default function App() {
             </View>
           )}
         </KeyboardAvoidingView>
+      )}
 
         {/* Pan / Move Reorder Modal Sheet */}
         <Modal visible={isMoveModalOpen} animationType="fade" transparent>
@@ -841,6 +1343,7 @@ export default function App() {
                   { type: 'heading3', label: 'H3' },
                   { type: 'todo', label: 'To-do' },
                   { type: 'bullet', label: 'Bullet' },
+                  { type: 'numbered', label: '1. Numbered' },
                   { type: 'quote', label: 'Quote' },
                   { type: 'code', label: 'Code' },
                   { type: 'callout', label: 'Callout' }
@@ -950,6 +1453,9 @@ export default function App() {
                         >
                           {n.title.trim() || 'Untitled Note'}
                         </Text>
+                        {n.isLocked && (
+                          <Feather name="lock" size={12} color="#ef4444" style={{ marginLeft: 6 }} />
+                        )}
                       </TouchableOpacity>
 
                       <TouchableOpacity
@@ -1024,10 +1530,68 @@ export default function App() {
                   {isTestingCloud ? 'Connecting...' : 'Save & Sync'}
                 </Text>
               </TouchableOpacity>
+
+              <View style={[styles.menuDivider, { backgroundColor: colors.border, marginVertical: 14 }]} />
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Feather name="shield" size={15} color={colors.textMain} />
+                  <Text style={[styles.subSectionTitle, { color: colors.textMain, marginBottom: 0 }]}>
+                    3-DIGIT PAGE SECURITY PIN
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 12, color: colors.textMuted }}>Current: {securityPin}</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TextInput
+                  style={[
+                    styles.cloudInput,
+                    {
+                      flex: 1,
+                      backgroundColor: colors.bgApp,
+                      color: colors.textMain,
+                      borderColor: colors.border,
+                      letterSpacing: 8,
+                      textAlign: 'center',
+                      fontSize: 16
+                    }
+                  ]}
+                  placeholder="New 3-digit PIN"
+                  placeholderTextColor={colors.textMuted}
+                  value={newPinInput}
+                  onChangeText={txt => setNewPinInput(txt.replace(/\D/g, '').slice(0, 3))}
+                  keyboardType="numeric"
+                  maxLength={3}
+                  secureTextEntry
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.cloudSaveBtn,
+                    {
+                      backgroundColor: colors.bgSubtle,
+                      borderColor: colors.border,
+                      borderWidth: 1,
+                      marginTop: 0,
+                      paddingHorizontal: 16
+                    }
+                  ]}
+                  onPress={saveCustomPin}
+                >
+                  <Text style={{ color: colors.textMain, fontWeight: '600' }}>Save PIN</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </Modal>
-      </SafeAreaView>
+      </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MainAppContent />
     </SafeAreaProvider>
   );
 }
@@ -1096,7 +1660,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 14,
     paddingBottom: 20,
-    justifyContent: 'space-between'
+    justifyContent: 'space-between',
+    position: 'relative',
+    overflow: 'hidden'
   },
   coverTopBar: {
     flexDirection: 'row',
@@ -1239,7 +1805,20 @@ const styles = StyleSheet.create({
   bulletDot: {
     fontSize: 18,
     lineHeight: 22,
-    marginTop: -1
+    marginTop: -1,
+    marginRight: 6,
+    width: 14,
+    textAlign: 'center'
+  },
+  numberedPrefix: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
+    marginTop: 0,
+    marginRight: 6,
+    minWidth: 20,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums']
   },
   quoteBar: {
     width: 3,
@@ -1520,5 +2099,90 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     fontWeight: '500'
+  },
+  // Locked Document Screen & 3-Digit Keypad
+  lockedScreenContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingBottom: 40
+  },
+  lockCardBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16
+  },
+  lockedScreenTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.02,
+    marginBottom: 4
+  },
+  lockedScreenSub: {
+    fontSize: 14,
+    marginBottom: 20,
+    textAlign: 'center'
+  },
+  pinDotsRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 12,
+    alignItems: 'center'
+  },
+  pinDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2
+  },
+  pinPromptText: {
+    fontSize: 13,
+    marginBottom: 16
+  },
+  pinErrorText: {
+    fontSize: 13,
+    color: '#ef4444',
+    marginBottom: 16,
+    fontWeight: '600'
+  },
+  fingerprintBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 22
+  },
+  fingerprintBtnText: {
+    fontSize: 13.5,
+    fontWeight: '600'
+  },
+  keypadGrid: {
+    width: 250,
+    gap: 10
+  },
+  keypadRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  keypadKey: {
+    flex: 1,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  keypadKeyText: {
+    fontSize: 20,
+    fontWeight: '600'
   }
 });
