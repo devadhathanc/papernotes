@@ -14,4 +14,6 @@ export interface IStorageAdapter {
   setActiveNoteId(id: string): Promise<void>;
   getCloudConfig(): Promise<CloudConfig | null>;
   saveCloudConfig(config: CloudConfig): Promise<void>;
+  getSecurityPinHash(): Promise<string | null>;
+  saveSecurityPinHash(hash: string): Promise<void>;
 }

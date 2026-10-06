@@ -9,7 +9,8 @@ import {
   Check,
   X,
   ExternalLink,
-  Database
+  Database,
+  Shield
 } from 'lucide-react';
 
 const SQL_SCHEMA = `-- Run in Supabase SQL Editor:
@@ -22,12 +23,17 @@ CREATE TABLE IF NOT EXISTS public.papernotes_notes (
     blocks JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    is_deleted BOOLEAN NOT NULL DEFAULT false
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
+    is_locked BOOLEAN NOT NULL DEFAULT false
 );
 
+ALTER TABLE public.papernotes_notes ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_papernotes_notes_updated_at ON public.papernotes_notes (updated_at DESC);
-ALTER TABLE public.papernotes_notes ENABLE ROW LEVEL SECURITY;
 
+-- Enable instant push sync via Supabase Realtime WebSocket
+ALTER PUBLICATION supabase_realtime ADD TABLE public.papernotes_notes;
+
+ALTER TABLE public.papernotes_notes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow public read access to notes" ON public.papernotes_notes FOR SELECT USING (true);
 CREATE POLICY "Allow public insert/update to notes" ON public.papernotes_notes FOR ALL USING (true) WITH CHECK (true);`;
 
@@ -39,7 +45,8 @@ export const CloudSyncModal: React.FC = () => {
     isCloudModalOpen,
     setIsCloudModalOpen,
     updateCloudConfig,
-    syncNow
+    syncNow,
+    changeSecurityPin
   } = useNotes();
 
   const [supabaseUrl, setSupabaseUrl] = useState('');
@@ -51,6 +58,14 @@ export const CloudSyncModal: React.FC = () => {
   });
   const [isTesting, setIsTesting] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
+
+  // PIN settings state
+  const [currentPinInput, setCurrentPinInput] = useState('');
+  const [newPinInput, setNewPinInput] = useState('');
+  const [pinMessage, setPinMessage] = useState<{ type: 'idle' | 'success' | 'error'; text: string }>({
+    type: 'idle',
+    text: ''
+  });
 
   useEffect(() => {
     if (cloudConfig) {
@@ -89,6 +104,26 @@ export const CloudSyncModal: React.FC = () => {
     navigator.clipboard.writeText(SQL_SCHEMA);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 2000);
+  };
+
+  const handleUpdatePin = async () => {
+    setPinMessage({ type: 'idle', text: '' });
+    if (!currentPinInput) {
+      setPinMessage({ type: 'error', text: 'Please enter your current PIN' });
+      return;
+    }
+    if (newPinInput.length !== 3 || !/^\d{3}$/.test(newPinInput)) {
+      setPinMessage({ type: 'error', text: 'New PIN must be exactly 3 digits (e.g. 123)' });
+      return;
+    }
+    const result = await changeSecurityPin(currentPinInput, newPinInput);
+    if (result.success) {
+      setPinMessage({ type: 'success', text: 'Security PIN updated successfully!' });
+      setCurrentPinInput('');
+      setNewPinInput('');
+    } else {
+      setPinMessage({ type: 'error', text: result.error || 'Failed to update PIN' });
+    }
   };
 
   return (
@@ -217,6 +252,63 @@ export const CloudSyncModal: React.FC = () => {
               <span>{isTesting ? 'Connecting...' : 'Save & Test'}</span>
             </button>
           </div>
+        </div>
+
+        {/* 3-Digit Page Security PIN Setup */}
+        <div className="security-pin-section">
+          <div className="security-section-header">
+            <div className="security-header-left">
+              <Shield size={16} />
+              <span>3-Digit Document Security PIN</span>
+            </div>
+            <span className="pin-status-pill">Status: Active (•••)</span>
+          </div>
+          <p className="security-section-sub">
+            Protect confidential notes with a 3-digit PIN. The current PIN is never displayed in plain text for your privacy.
+          </p>
+
+          <div className="pin-input-group-row">
+            <div className="form-group pin-field">
+              <label>Current PIN</label>
+              <input
+                type="password"
+                maxLength={3}
+                placeholder="•••"
+                value={currentPinInput}
+                onChange={e => setCurrentPinInput(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                className="cloud-input pin-center-input"
+              />
+            </div>
+            <div className="form-group pin-field">
+              <label>New 3-Digit PIN</label>
+              <input
+                type="password"
+                maxLength={3}
+                placeholder="•••"
+                value={newPinInput}
+                onChange={e => setNewPinInput(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                className="cloud-input pin-center-input"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn secondary pin-save-btn"
+              onClick={handleUpdatePin}
+            >
+              Update PIN
+            </button>
+          </div>
+
+          {pinMessage.text && (
+            <div className={`status-banner ${pinMessage.type}`}>
+              {pinMessage.type === 'success' ? (
+                <CheckCircle2 size={14} />
+              ) : (
+                <AlertCircle size={14} />
+              )}
+              <span>{pinMessage.text}</span>
+            </div>
+          )}
         </div>
 
         {/* PostgreSQL Schema Setup */}

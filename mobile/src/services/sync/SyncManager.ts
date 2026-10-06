@@ -14,6 +14,9 @@ export class MobileSyncManager {
     error: null
   };
   private listeners: Array<(state: SyncState, stats: SyncStats) => void> = [];
+  private notesListeners: Array<(notes: Note[]) => void> = [];
+  private realtimeUnsubscribe: (() => void) | null = null;
+  private autoSyncTimer: any = null;
 
   constructor(storage: AsyncStorageAdapter) {
     this.storage = storage;
@@ -27,11 +30,31 @@ export class MobileSyncManager {
     };
   }
 
+  public subscribeNotes(listener: (notes: Note[]) => void): () => void {
+    this.notesListeners.push(listener);
+    return () => {
+      this.notesListeners = this.notesListeners.filter(l => l !== listener);
+    };
+  }
+
   private notify() {
     this.listeners.forEach(l => l(this.syncState, this.stats));
   }
 
+  private notifyNotes(notes: Note[]) {
+    this.notesListeners.forEach(l => l(notes));
+  }
+
   public async initializeWithConfig(config: CloudConfig | null): Promise<boolean> {
+    if (this.realtimeUnsubscribe) {
+      this.realtimeUnsubscribe();
+      this.realtimeUnsubscribe = null;
+    }
+    if (this.autoSyncTimer) {
+      clearInterval(this.autoSyncTimer);
+      this.autoSyncTimer = null;
+    }
+
     if (!config || !config.enabled || !config.supabaseUrl || !config.supabaseAnonKey) {
       this.provider = null;
       this.syncState = 'local-only';
@@ -45,6 +68,22 @@ export class MobileSyncManager {
     if (test.success) {
       this.provider = provider;
       this.syncState = 'synced';
+
+      // Connect Supabase Realtime WebSocket subscription
+      if (provider.subscribeToRealtime) {
+        this.realtimeUnsubscribe = provider.subscribeToRealtime(
+          (note) => this.handleRealtimeUpsert(note),
+          (id) => this.handleRealtimeDelete(id)
+        );
+      }
+
+      // Background periodic fallback sync every 60 seconds
+      this.autoSyncTimer = setInterval(() => {
+        if (this.syncState !== 'syncing') {
+          this.sync();
+        }
+      }, 60000);
+
       this.notify();
       return true;
     } else {
@@ -52,6 +91,47 @@ export class MobileSyncManager {
       this.stats.error = test.error;
       this.notify();
       return false;
+    }
+  }
+
+  private async handleRealtimeUpsert(incomingNote: Note) {
+    try {
+      const localNotes = await this.storage.loadNotes();
+      const existingIdx = localNotes.findIndex(n => n.id === incomingNote.id);
+
+      let updatedList: Note[];
+      if (existingIdx >= 0) {
+        const local = localNotes[existingIdx];
+        const localTime = new Date(local.updatedAt).getTime();
+        const incomingTime = new Date(incomingNote.updatedAt).getTime();
+
+        if (incomingTime >= localTime) {
+          updatedList = localNotes.map((n, idx) => idx === existingIdx ? incomingNote : n);
+        } else {
+          return;
+        }
+      } else {
+        if (incomingNote.isDeleted) return;
+        updatedList = [incomingNote, ...localNotes];
+      }
+
+      await this.storage.saveNotes(updatedList);
+      this.notifyNotes(updatedList);
+    } catch (e) {
+      console.warn('MobileSyncManager: Error handling realtime upsert', e);
+    }
+  }
+
+  private async handleRealtimeDelete(deletedId: string) {
+    try {
+      const localNotes = await this.storage.loadNotes();
+      const updatedList = localNotes.map(n =>
+        n.id === deletedId ? { ...n, isDeleted: true, updatedAt: new Date().toISOString() } : n
+      );
+      await this.storage.saveNotes(updatedList);
+      this.notifyNotes(updatedList);
+    } catch (e) {
+      console.warn('MobileSyncManager: Error handling realtime delete', e);
     }
   }
 
@@ -124,6 +204,7 @@ export class MobileSyncManager {
         error: null
       };
       this.notify();
+      this.notifyNotes(finalNotes);
 
       return finalNotes;
     } catch (err: any) {

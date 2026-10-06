@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Download,
   Upload,
-  X
+  X,
+  Lock
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -141,6 +142,11 @@ export const Sidebar: React.FC = () => {
                     <AppIcon name={note.icon} size={15} />
                   </div>
                   <span className="page-item-title">{title}</span>
+                  {note.isLocked && (
+                    <span className="page-lock-badge" title="Protected with PIN">
+                      <Lock size={12} style={{ opacity: 0.6, flexShrink: 0, marginLeft: 4 }} />
+                    </span>
+                  )}
 
                   <button
                     className="page-item-delete"

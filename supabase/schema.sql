@@ -13,11 +13,30 @@ CREATE TABLE IF NOT EXISTS public.papernotes_notes (
     blocks JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    is_deleted BOOLEAN NOT NULL DEFAULT false
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
+    is_locked BOOLEAN NOT NULL DEFAULT false
 );
+
+-- Migration for existing tables:
+ALTER TABLE public.papernotes_notes ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false;
 
 -- 2. Create index on updated_at for fast incremental synchronization
 CREATE INDEX IF NOT EXISTS idx_papernotes_notes_updated_at ON public.papernotes_notes (updated_at DESC);
+
+-- 3. Enable Supabase Realtime publication for instant push-based sync across web & mobile
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'papernotes_notes'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.papernotes_notes;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- If already in publication or running on managed instance
+        NULL;
+END $$;
 
 -- 3. Enable Row Level Security (RLS)
 ALTER TABLE public.papernotes_notes ENABLE ROW LEVEL SECURITY;

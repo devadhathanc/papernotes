@@ -3,6 +3,7 @@ import type { Note, Block, BlockType, CoverStyle } from '../domain/Note';
 import type { SyncState, CloudConfig, SyncStats } from '../domain/Sync';
 import { LocalStorageAdapter } from '../services/storage/LocalStorageAdapter';
 import { SyncManager } from '../services/sync/SyncManager';
+import { hashPin, verifyPin } from '../utils/crypto';
 
 interface NotesContextType {
   notes: Note[];
@@ -18,6 +19,14 @@ interface NotesContextType {
   isCloudModalOpen: boolean;
   isIconPickerOpen: boolean;
   focusedBlockId: string | null;
+
+  // Page Lock & PIN Security
+  unlockedNoteIds: string[];
+  isCurrentNoteLocked: boolean;
+  toggleLockActiveNote: () => void;
+  unlockNote: (noteId: string, pin: string) => Promise<boolean>;
+  relockNote: (noteId: string) => void;
+  changeSecurityPin: (currentPin: string, newPin: string) => Promise<{ success: boolean; error?: string }>;
 
   // Actions
   selectNote: (id: string) => void;
@@ -63,12 +72,16 @@ function generateId(prefix = 'b'): string {
 }
 
 export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [allNotes, setAllNotes] = useState<Note[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('local-only');
   const [syncStats, setSyncStats] = useState<SyncStats>(syncManager.getStats());
   const [cloudConfig, setCloudConfig] = useState<CloudConfig | null>(null);
-  
+
+  // Security PIN & Document Locking
+  const [unlockedNoteIds, setUnlockedNoteIds] = useState<string[]>([]);
+  const [securityPinHash, setSecurityPinHash] = useState<string | null>(null);
+
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('papernotes_theme_v1') as 'dark' | 'light') || 'dark';
@@ -91,18 +104,30 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Filtered active notes list (excludes deleted notes)
+  const notes = useMemo(() => allNotes.filter(n => !n.isDeleted), [allNotes]);
+
   // Initialize data on mount
   useEffect(() => {
     async function init() {
       const loadedNotes = await storageAdapter.loadNotes();
-      setNotes(loadedNotes);
+      setAllNotes(loadedNotes);
 
+      const activeList = loadedNotes.filter(n => !n.isDeleted);
       const savedActiveId = await storageAdapter.getActiveNoteId();
-      if (savedActiveId && loadedNotes.some(n => n.id === savedActiveId)) {
+      if (savedActiveId && activeList.some(n => n.id === savedActiveId)) {
         setActiveNoteId(savedActiveId);
-      } else if (loadedNotes.length > 0) {
-        setActiveNoteId(loadedNotes[0].id);
+      } else if (activeList.length > 0) {
+        setActiveNoteId(activeList[0].id);
       }
+
+      // Initialize PIN hash (default to '123' if not set)
+      let pinHash = await storageAdapter.getSecurityPinHash();
+      if (!pinHash) {
+        pinHash = await hashPin('123');
+        await storageAdapter.saveSecurityPinHash(pinHash);
+      }
+      setSecurityPinHash(pinHash);
 
       const cfg = await storageAdapter.getCloudConfig();
       if (cfg) {
@@ -110,7 +135,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await syncManager.initializeWithConfig(cfg);
         if (cfg.enabled) {
           const synced = await syncManager.sync();
-          setNotes(synced);
+          setAllNotes(synced);
         }
       }
     }
@@ -118,12 +143,20 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     init();
 
     // Subscribe to sync manager state updates
-    const unsubscribe = syncManager.subscribe((state, stats) => {
+    const unsubscribeState = syncManager.subscribe((state, stats) => {
       setSyncState(state);
       setSyncStats(stats);
     });
 
-    return () => unsubscribe();
+    // Subscribe to real-time note updates (from Supabase Realtime WebSocket)
+    const unsubscribeNotes = syncManager.subscribeNotes((syncedNotes) => {
+      setAllNotes(syncedNotes);
+    });
+
+    return () => {
+      unsubscribeState();
+      unsubscribeNotes();
+    };
   }, []);
 
   // Update theme data attribute
@@ -134,7 +167,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Persist notes with debounce
   const persistNotes = useCallback((updatedNotes: Note[]) => {
-    setNotes(updatedNotes);
+    setAllNotes(updatedNotes);
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     saveTimeoutRef.current = setTimeout(async () => {
@@ -149,6 +182,11 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const activeNote = useMemo(() => {
     return notes.find(n => n.id === activeNoteId) || null;
   }, [notes, activeNoteId]);
+
+  const isCurrentNoteLocked = useMemo(() => {
+    if (!activeNote) return false;
+    return Boolean(activeNote.isLocked && !unlockedNoteIds.includes(activeNote.id));
+  }, [activeNote, unlockedNoteIds]);
 
   const selectNote = useCallback((id: string) => {
     setActiveNoteId(id);
@@ -175,77 +213,119 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ]
     };
 
-    const next = [newNote, ...notes];
+    const next = [newNote, ...allNotes];
     persistNotes(next);
     selectNote(newNote.id);
     return newNote;
-  }, [notes, persistNotes, selectNote]);
+  }, [allNotes, persistNotes, selectNote]);
 
   const deleteNote = useCallback((id: string) => {
-    if (notes.length <= 1) {
-      // Clear instead of leaving zero notes
-      const cleared = notes.map(n => n.id === id ? {
-        ...n,
-        title: '',
-        icon: 'file-text',
-        blocks: [{ id: generateId('b'), type: 'paragraph' as BlockType, content: '', order: 0, updatedAt: new Date().toISOString() }]
-      } : n);
-      persistNotes(cleared);
-      return;
+    const now = new Date().toISOString();
+    const next = allNotes.map(n => (n.id === id ? { ...n, isDeleted: true, updatedAt: now } : n));
+    setAllNotes(next);
+
+    // Save immediately so deletion persists on reload
+    storageAdapter.saveNotes(next);
+    if (cloudConfig?.enabled) {
+      syncManager.sync();
     }
 
-    const next = notes.filter(n => n.id !== id);
+    const remaining = next.filter(n => !n.isDeleted);
+    if (remaining.length === 0) {
+      createNote();
+    } else if (activeNoteId === id) {
+      selectNote(remaining[0].id);
+    }
+  }, [allNotes, activeNoteId, cloudConfig, createNote, selectNote]);
+
+  // Page Lock & PIN Security actions
+  const toggleLockActiveNote = useCallback(() => {
+    if (!activeNoteId) return;
+    const target = allNotes.find(n => n.id === activeNoteId);
+    if (!target) return;
+    const willLock = !target.isLocked;
+    const now = new Date().toISOString();
+    const next = allNotes.map(n => n.id === activeNoteId ? { ...n, isLocked: willLock, updatedAt: now } : n);
     persistNotes(next);
 
-    if (activeNoteId === id) {
-      selectNote(next[0].id);
+    if (willLock) {
+      setUnlockedNoteIds(prev => prev.filter(id => id !== activeNoteId));
     }
-  }, [notes, activeNoteId, persistNotes, selectNote]);
+  }, [activeNoteId, allNotes, persistNotes]);
+
+  const unlockNote = useCallback(async (noteId: string, pin: string): Promise<boolean> => {
+    const hash = securityPinHash || (await hashPin('123'));
+    const isValid = await verifyPin(pin, hash);
+    if (isValid) {
+      setUnlockedNoteIds(prev => (prev.includes(noteId) ? prev : [...prev, noteId]));
+      return true;
+    }
+    return false;
+  }, [securityPinHash]);
+
+  const relockNote = useCallback((noteId: string) => {
+    setUnlockedNoteIds(prev => prev.filter(id => id !== noteId));
+  }, []);
+
+  const changeSecurityPin = useCallback(async (currentPin: string, newPin: string): Promise<{ success: boolean; error?: string }> => {
+    if (!/^\d{3}$/.test(newPin)) {
+      return { success: false, error: 'New PIN must be exactly 3 digits (0-9)' };
+    }
+    const currentHash = securityPinHash || (await hashPin('123'));
+    const isValid = await verifyPin(currentPin, currentHash);
+    if (!isValid) {
+      return { success: false, error: 'Current PIN is incorrect' };
+    }
+    const newHash = await hashPin(newPin);
+    await storageAdapter.saveSecurityPinHash(newHash);
+    setSecurityPinHash(newHash);
+    return { success: true };
+  }, [securityPinHash]);
 
   const updateNoteTitle = useCallback((title: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? { ...n, title, updatedAt: now } : n);
+    const next = allNotes.map(n => n.id === activeNoteId ? { ...n, title, updatedAt: now } : n);
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const updateNoteIcon = useCallback((icon: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? { ...n, icon, updatedAt: now } : n);
+    const next = allNotes.map(n => n.id === activeNoteId ? { ...n, icon, updatedAt: now } : n);
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const toggleNoteCover = useCallback(() => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? {
+    const next = allNotes.map(n => n.id === activeNoteId ? {
       ...n,
       hasCover: !n.hasCover,
       coverStyle: n.coverStyle || 'charcoal-mesh',
       updatedAt: now
     } : n);
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const setCoverStyle = useCallback((coverStyle: CoverStyle) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => n.id === activeNoteId ? { ...n, coverStyle, updatedAt: now } : n);
+    const next = allNotes.map(n => n.id === activeNoteId ? { ...n, coverStyle, updatedAt: now } : n);
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   // Block updates
   const updateBlock = useCallback((blockId: string, updates: Partial<Block>) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const updatedBlocks = n.blocks.map(b => b.id === blockId ? { ...b, ...updates, updatedAt: now } : b);
       return { ...n, blocks: updatedBlocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const addBlock = useCallback((afterBlockId: string | null, type: BlockType = 'paragraph'): string => {
     if (!activeNoteId) return '';
@@ -260,7 +340,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now
     };
 
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = [...n.blocks];
       const targetIdx = afterBlockId ? blocks.findIndex(b => b.id === afterBlockId) : -1;
@@ -279,13 +359,13 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     persistNotes(next);
     setFocusedBlockId(newId);
     return newId;
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const deleteBlock = useCallback((blockId: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
 
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       if (n.blocks.length <= 1) return n; // Keep at least one block
 
@@ -295,7 +375,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   // Reorder / Pan Blocks feature!
   const reorderBlocks = useCallback((fromIndex: number, toIndex: number) => {
@@ -303,7 +383,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (fromIndex === toIndex) return;
 
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = [...n.blocks];
       const [moved] = blocks.splice(fromIndex, 1);
@@ -313,12 +393,12 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const convertBlockType = useCallback((blockId: string, type: BlockType) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.map(b => {
         if (b.id !== blockId) return b;
@@ -333,18 +413,18 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   const toggleTodo = useCallback((blockId: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.map(b => b.id === blockId ? { ...b, checked: !b.checked, updatedAt: now } : b);
       return { ...n, blocks, updatedAt: now };
     });
     persistNotes(next);
-  }, [activeNoteId, notes, persistNotes]);
+  }, [activeNoteId, allNotes, persistNotes]);
 
   // UI state toggles
   const toggleTheme = useCallback(() => {
@@ -366,7 +446,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Cloud Sync Actions
   const syncNow = useCallback(async () => {
     const syncedNotes = await syncManager.sync();
-    setNotes(syncedNotes);
+    setAllNotes(syncedNotes);
   }, []);
 
   const updateCloudConfig = useCallback(async (config: CloudConfig): Promise<boolean> => {
@@ -375,7 +455,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const success = await syncManager.initializeWithConfig(config);
     if (success && config.enabled) {
       const synced = await syncManager.sync();
-      setNotes(synced);
+      setAllNotes(synced);
     }
     return success;
   }, []);
@@ -427,7 +507,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (filename.endsWith('.json')) {
         const parsed = JSON.parse(content);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const next = [...parsed, ...notes];
+          const next = [...parsed, ...allNotes];
           persistNotes(next);
           selectNote(parsed[0].id);
           return true;
@@ -454,7 +534,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           blocks: blocks.length > 0 ? blocks : [{ id: generateId('b'), type: 'paragraph', content: '', order: 0, updatedAt: new Date().toISOString() }]
         };
 
-        const next = [newNote, ...notes];
+        const next = [newNote, ...allNotes];
         persistNotes(next);
         selectNote(newNote.id);
         return true;
@@ -464,7 +544,7 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.error('Import failed', e);
       return false;
     }
-  }, [notes, persistNotes, selectNote]);
+  }, [allNotes, persistNotes, selectNote]);
 
   const value = useMemo(() => ({
     notes,
@@ -480,6 +560,14 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isCloudModalOpen,
     isIconPickerOpen,
     focusedBlockId,
+
+    // Page Lock & PIN Security
+    unlockedNoteIds,
+    isCurrentNoteLocked,
+    toggleLockActiveNote,
+    unlockNote,
+    relockNote,
+    changeSecurityPin,
 
     selectNote,
     createNote,
@@ -522,6 +610,12 @@ export const NotesProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isCloudModalOpen,
     isIconPickerOpen,
     focusedBlockId,
+    unlockedNoteIds,
+    isCurrentNoteLocked,
+    toggleLockActiveNote,
+    unlockNote,
+    relockNote,
+    changeSecurityPin,
     selectNote,
     createNote,
     deleteNote,

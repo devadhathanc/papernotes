@@ -8,4 +8,8 @@ export interface ISyncProvider {
   testConnection(): Promise<{ success: boolean; error?: string }>;
   pullChanges(since?: string | null): Promise<{ notes: Note[]; error?: string }>;
   pushChanges(notes: Note[]): Promise<{ success: boolean; error?: string }>;
+  subscribeToRealtime?(
+    onNoteUpsert: (note: Note) => void,
+    onNoteDelete: (noteId: string) => void
+  ): () => void;
 }

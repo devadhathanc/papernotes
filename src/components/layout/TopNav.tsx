@@ -10,7 +10,9 @@ import {
   CloudCheck,
   CloudAlert,
   RefreshCw,
-  Check
+  Check,
+  Lock,
+  Unlock
 } from 'lucide-react';
 
 export const TopNav: React.FC = () => {
@@ -22,6 +24,7 @@ export const TopNav: React.FC = () => {
     toggleSidebar,
     toggleZenMode,
     deleteNote,
+    toggleLockActiveNote,
     exportMarkdown,
     setIsCloudModalOpen
   } = useNotes();
@@ -86,6 +89,18 @@ export const TopNav: React.FC = () => {
           {syncState === 'error' && <CloudAlert size={15} />}
           {(syncState === 'local-only' || syncState === 'offline') && <Cloud size={15} />}
         </button>
+
+        {/* Lock / Unlock current note */}
+        {activeNote && (
+          <button
+            className={`top-nav-icon-btn ${activeNote.isLocked ? 'active-lock' : ''}`}
+            onClick={toggleLockActiveNote}
+            title={activeNote.isLocked ? 'Page is locked (click to toggle lock)' : 'Lock this page with PIN'}
+            type="button"
+          >
+            {activeNote.isLocked ? <Lock size={15} style={{ color: '#ef4444' }} /> : <Unlock size={15} />}
+          </button>
+        )}
 
         {/* Export Markdown */}
         <button

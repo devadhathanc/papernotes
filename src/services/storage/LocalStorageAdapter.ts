@@ -5,6 +5,7 @@ import type { CloudConfig } from '../../domain/Sync';
 const STORAGE_KEY_NOTES = 'papernotes_documents_v1';
 const STORAGE_KEY_ACTIVE = 'papernotes_active_id_v1';
 const STORAGE_KEY_CLOUD = 'papernotes_cloud_config_v1';
+const STORAGE_KEY_PIN = 'papernotes_pin_hash_v1';
 
 export const STARTER_NOTES: Note[] = [
   {
@@ -292,6 +293,22 @@ export class LocalStorageAdapter implements IStorageAdapter {
       localStorage.setItem(STORAGE_KEY_CLOUD, JSON.stringify(config));
     } catch (e) {
       console.error('LocalStorageAdapter: failed to save cloud config', e);
+    }
+  }
+
+  async getSecurityPinHash(): Promise<string | null> {
+    try {
+      return localStorage.getItem(STORAGE_KEY_PIN);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveSecurityPinHash(hash: string): Promise<void> {
+    try {
+      localStorage.setItem(STORAGE_KEY_PIN, hash);
+    } catch (e) {
+      console.error('LocalStorageAdapter: failed to save PIN hash', e);
     }
   }
 }

@@ -4,11 +4,13 @@ import { PageCover } from './PageCover';
 import { PageHeader } from './PageHeader';
 import { BlockItem } from './BlockItem';
 import { SlashMenu } from './SlashMenu';
+import { LockedScreen } from './LockedScreen';
 import type { BlockType } from '../../domain/Note';
 
 export const BlockEditor: React.FC = () => {
   const {
     activeNote,
+    isCurrentNoteLocked,
     updateNoteTitle,
     focusedBlockId,
     setFocusedBlockId,
@@ -36,6 +38,10 @@ export const BlockEditor: React.FC = () => {
         <p>No document selected. Choose a page or create a new one.</p>
       </div>
     );
+  }
+
+  if (isCurrentNoteLocked) {
+    return <LockedScreen />;
   }
 
   const handleOpenSlashMenu = (blockId: string, rect: DOMRect) => {

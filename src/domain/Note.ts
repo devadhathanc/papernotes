@@ -38,6 +38,7 @@ export interface Note {
   createdAt: string;
   updatedAt: string;
   isDeleted?: boolean;
+  isLocked?: boolean;
   version?: number;
 }
 

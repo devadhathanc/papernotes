@@ -1792,3 +1792,241 @@ button {
     font-size: 26px;
   }
 }
+
+/* ==========================================================================
+   Page Locking & Security PIN Styles
+   ========================================================================== */
+
+.locked-screen-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 120px);
+  padding: 40px 20px;
+}
+
+.locked-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 36px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-shadow: var(--shadow-md);
+  animation: fadeIn 0.25s ease-out;
+}
+
+.lock-icon-badge {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-medium);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-main);
+  margin-bottom: 20px;
+}
+
+.locked-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
+}
+
+.locked-doc-name {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0 0 24px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin-dots-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.pin-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border-medium);
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.pin-dot.filled {
+  background: var(--contrast);
+  border-color: var(--contrast);
+}
+
+.pin-dot.error {
+  border-color: #ef4444;
+  background: #ef4444;
+}
+
+.pin-dots-error {
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+.pin-prompt-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 24px;
+}
+
+.pin-prompt-text.error {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.keypad-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 240px;
+  margin-bottom: 24px;
+}
+
+.keypad-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.keypad-btn {
+  flex: 1;
+  height: 52px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-size: 18px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.keypad-btn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-medium);
+}
+
+.keypad-btn:active {
+  transform: scale(0.96);
+  background: var(--bg-hover);
+}
+
+.keypad-btn.action {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.keypad-btn.action:hover {
+  background: var(--bg-subtle);
+}
+
+.locked-footer-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  opacity: 0.75;
+}
+
+/* Security PIN Settings in Modal */
+.security-pin-section {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  margin: 20px 0;
+}
+
+.security-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.security-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pin-status-pill {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
+.security-section-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+
+.pin-input-group-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.pin-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.pin-center-input {
+  text-align: center;
+  letter-spacing: 6px;
+  font-size: 16px;
+}
+
+.pin-save-btn {
+  height: 38px;
+  white-space: nowrap;
+}
+
+.page-lock-badge {
+  display: inline-flex;
+  align-items: center;
+}

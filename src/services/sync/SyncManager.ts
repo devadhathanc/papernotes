@@ -15,6 +15,9 @@ export class SyncManager {
     error: null
   };
   private onStateChangeListeners: Array<(state: SyncState, stats: SyncStats) => void> = [];
+  private onNotesUpdatedListeners: Array<(notes: Note[]) => void> = [];
+  private realtimeUnsubscribe: (() => void) | null = null;
+  private autoSyncInterval: any = null;
 
   constructor(storage: IStorageAdapter) {
     this.storage = storage;
@@ -34,8 +37,19 @@ export class SyncManager {
     };
   }
 
+  public subscribeNotes(listener: (notes: Note[]) => void): () => void {
+    this.onNotesUpdatedListeners.push(listener);
+    return () => {
+      this.onNotesUpdatedListeners = this.onNotesUpdatedListeners.filter(l => l !== listener);
+    };
+  }
+
   private notify() {
     this.onStateChangeListeners.forEach(l => l(this.syncState, this.stats));
+  }
+
+  private notifyNotes(notes: Note[]) {
+    this.onNotesUpdatedListeners.forEach(l => l(notes));
   }
 
   private handleNetworkChange(isOnline: boolean) {
@@ -48,13 +62,80 @@ export class SyncManager {
   }
 
   public setProvider(provider: ISyncProvider | null) {
+    // Clean up existing realtime subscription & timer
+    if (this.realtimeUnsubscribe) {
+      this.realtimeUnsubscribe();
+      this.realtimeUnsubscribe = null;
+    }
+    if (this.autoSyncInterval) {
+      clearInterval(this.autoSyncInterval);
+      this.autoSyncInterval = null;
+    }
+
     this.provider = provider;
     if (!provider) {
       this.syncState = 'local-only';
     } else {
       this.syncState = 'synced';
+
+      // Setup Realtime WebSocket subscription if supported
+      if (provider.subscribeToRealtime) {
+        this.realtimeUnsubscribe = provider.subscribeToRealtime(
+          (note) => this.handleRealtimeUpsert(note),
+          (id) => this.handleRealtimeDelete(id)
+        );
+      }
+
+      // Setup automatic periodic background sync every 60s
+      this.autoSyncInterval = setInterval(() => {
+        if (this.syncState !== 'syncing' && typeof navigator !== 'undefined' && navigator.onLine) {
+          this.sync();
+        }
+      }, 60000);
     }
     this.notify();
+  }
+
+  private async handleRealtimeUpsert(incomingNote: Note) {
+    try {
+      const localNotes = await this.storage.loadNotes();
+      const existingIdx = localNotes.findIndex(n => n.id === incomingNote.id);
+
+      let updatedList: Note[];
+      if (existingIdx >= 0) {
+        const local = localNotes[existingIdx];
+        const localTime = new Date(local.updatedAt).getTime();
+        const incomingTime = new Date(incomingNote.updatedAt).getTime();
+
+        if (incomingTime >= localTime) {
+          updatedList = localNotes.map((n, idx) => idx === existingIdx ? incomingNote : n);
+        } else {
+          // Local is newer, don't overwrite
+          return;
+        }
+      } else {
+        if (incomingNote.isDeleted) return;
+        updatedList = [incomingNote, ...localNotes];
+      }
+
+      await this.storage.saveNotes(updatedList);
+      this.notifyNotes(updatedList);
+    } catch (e) {
+      console.warn('SyncManager: Error handling realtime upsert', e);
+    }
+  }
+
+  private async handleRealtimeDelete(deletedId: string) {
+    try {
+      const localNotes = await this.storage.loadNotes();
+      const updatedList = localNotes.map(n =>
+        n.id === deletedId ? { ...n, isDeleted: true, updatedAt: new Date().toISOString() } : n
+      );
+      await this.storage.saveNotes(updatedList);
+      this.notifyNotes(updatedList);
+    } catch (e) {
+      console.warn('SyncManager: Error handling realtime delete', e);
+    }
   }
 
   public async initializeWithConfig(config: CloudConfig | null): Promise<boolean> {
@@ -170,6 +251,7 @@ export class SyncManager {
         error: null
       };
       this.notify();
+      this.notifyNotes(finalNotes);
 
       return finalNotes;
     } catch (err: any) {

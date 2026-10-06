@@ -169,11 +169,14 @@ function CoverPatternBackground({
 }
 
 function MainAppContent() {
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [allNotes, setAllNotes] = useState<Note[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [syncState, setSyncState] = useState<SyncState>('local-only');
   const [syncStats, setSyncStats] = useState<SyncStats>(syncManager.getStats());
+
+  // Filtered notes list (excludes deleted notes)
+  const notes = useMemo(() => allNotes.filter(n => !n.isDeleted), [allNotes]);
 
   // Interactive Block States
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -193,10 +196,12 @@ function MainAppContent() {
   const [enteredPin, setEnteredPin] = useState('');
   const [pinError, setPinError] = useState(false);
   const [isPinSetupOpen, setIsPinSetupOpen] = useState(false);
+  const [currentPinChangeInput, setCurrentPinChangeInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [hasBiometrics, setHasBiometrics] = useState(false);
 
   // Cloud credentials form
+  const [cloudConfig, setCloudConfig] = useState<CloudConfig | null>(null);
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [isTestingCloud, setIsTestingCloud] = useState(false);
@@ -244,22 +249,24 @@ function MainAppContent() {
   useEffect(() => {
     async function init() {
       const loaded = await storage.loadNotes();
-      setNotes(loaded);
+      setAllNotes(loaded);
+      const activeList = loaded.filter(n => !n.isDeleted);
       const active = await storage.getActiveNoteId();
-      if (active && loaded.some(n => n.id === active)) {
+      if (active && activeList.some(n => n.id === active)) {
         setActiveNoteId(active);
-      } else if (loaded.length > 0) {
-        setActiveNoteId(loaded[0].id);
+      } else if (activeList.length > 0) {
+        setActiveNoteId(activeList[0].id);
       }
 
-       const cfg = await storage.getCloudConfig();
+      const cfg = await storage.getCloudConfig();
       if (cfg) {
+        setCloudConfig(cfg);
         setSupabaseUrl(cfg.supabaseUrl || '');
         setSupabaseAnonKey(cfg.supabaseAnonKey || '');
         await syncManager.initializeWithConfig(cfg);
         if (cfg.enabled) {
           const synced = await syncManager.sync();
-          setNotes(synced);
+          setAllNotes(synced);
         }
       }
 
@@ -276,20 +283,31 @@ function MainAppContent() {
     }
     init();
 
-    const unsub = syncManager.subscribe((st, stats) => {
+    const unsubState = syncManager.subscribe((st, stats) => {
       setSyncState(st);
       setSyncStats(stats);
     });
-    return () => unsub();
+
+    const unsubNotes = syncManager.subscribeNotes((syncedNotes) => {
+      setAllNotes(syncedNotes);
+    });
+
+    return () => {
+      unsubState();
+      unsubNotes();
+    };
   }, []);
 
   const persistNotes = useCallback((updatedNotes: Note[]) => {
-    setNotes(updatedNotes);
+    setAllNotes(updatedNotes);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       await storage.saveNotes(updatedNotes);
+      if (cloudConfig?.enabled) {
+        syncManager.sync();
+      }
     }, 400);
-  }, []);
+  }, [cloudConfig]);
 
   const activeNote = useMemo(() => {
     return notes.find(n => n.id === activeNoteId) || null;
@@ -373,7 +391,7 @@ function MainAppContent() {
     }
 
     const now = new Date().toISOString();
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, isLocked: willLock, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, isLocked: willLock, updatedAt: now } : n));
     persistNotes(next);
 
     if (willLock) {
@@ -390,12 +408,21 @@ function MainAppContent() {
   };
 
   const saveCustomPin = async () => {
+    if (!currentPinChangeInput) {
+      Alert.alert('Current PIN Required', 'Please enter your current PIN to change it.');
+      return;
+    }
+    if (currentPinChangeInput !== securityPin) {
+      Alert.alert('Incorrect PIN', 'The current PIN you entered is incorrect.');
+      return;
+    }
     if (newPinInput.length !== 3 || !/^\d{3}$/.test(newPinInput)) {
-      Alert.alert('Invalid PIN', 'Please enter exactly 3 digits (e.g. 123).');
+      Alert.alert('Invalid PIN', 'Please enter exactly 3 digits for your new PIN (e.g. 123).');
       return;
     }
     await storage.saveSecurityPin(newPinInput);
     setSecurityPin(newPinInput);
+    setCurrentPinChangeInput('');
     setNewPinInput('');
     setIsPinSetupOpen(false);
     Alert.alert('PIN Updated', 'Your 3-digit security PIN has been updated successfully!');
@@ -427,7 +454,7 @@ function MainAppContent() {
         }
       ]
     };
-    const next = [newNote, ...notes];
+    const next = [newNote, ...allNotes];
     persistNotes(next);
     selectNote(newNote.id);
   };
@@ -437,24 +464,30 @@ function MainAppContent() {
       Alert.alert('Notice', 'Cannot delete the only page');
       return;
     }
-    const next = notes.filter(n => n.id !== id);
-    persistNotes(next);
-    if (activeNoteId === id) {
-      selectNote(next[0].id);
+    const now = new Date().toISOString();
+    const next = allNotes.map(n => (n.id === id ? { ...n, isDeleted: true, updatedAt: now } : n));
+    setAllNotes(next);
+    storage.saveNotes(next);
+    if (cloudConfig?.enabled) {
+      syncManager.sync();
+    }
+    const remaining = next.filter(n => !n.isDeleted);
+    if (activeNoteId === id && remaining.length > 0) {
+      selectNote(remaining[0].id);
     }
   };
 
   const updateTitle = (text: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, title: text, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, title: text, updatedAt: now } : n));
     persistNotes(next);
   };
 
   const updateNoteIcon = (iconName: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, icon: iconName, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, icon: iconName, updatedAt: now } : n));
     persistNotes(next);
     setIsIconPickerOpen(false);
   };
@@ -489,7 +522,7 @@ function MainAppContent() {
       newContent = content.substring(2);
     }
 
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.map(b => {
         if (b.id !== blockId) return b;
@@ -508,7 +541,7 @@ function MainAppContent() {
   const toggleTodo = (blockId: string) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, checked: !b.checked, updatedAt: now } : b));
       return { ...n, blocks, updatedAt: now };
@@ -523,7 +556,7 @@ function MainAppContent() {
     if (targetIndex < 0 || targetIndex >= activeNote.blocks.length) return;
 
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = [...n.blocks];
       const [moved] = blocks.splice(index, 1);
@@ -560,7 +593,7 @@ function MainAppContent() {
     }
 
     updatedBlocks.forEach((b, i) => (b.order = i));
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
     persistNotes(next);
     setSelectedBlockId(newBlock.id);
     setIsSlashOpen(false);
@@ -584,7 +617,7 @@ function MainAppContent() {
     updatedBlocks.splice(idx + 1, 0, duplicated);
     updatedBlocks.forEach((b, i) => (b.order = i));
 
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, blocks: updatedBlocks, updatedAt: now } : n));
     persistNotes(next);
     setSelectedBlockId(duplicated.id);
     setBlockMenuBlockId(null);
@@ -593,7 +626,7 @@ function MainAppContent() {
   const convertBlockType = (blockId: string, type: BlockType) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.map(b => (b.id === blockId ? { ...b, type, updatedAt: now } : b));
       return { ...n, blocks, updatedAt: now };
@@ -605,7 +638,7 @@ function MainAppContent() {
   const deleteBlock = (blockId: string) => {
     if (!activeNote || activeNote.blocks.length <= 1) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => {
+    const next = allNotes.map(n => {
       if (n.id !== activeNoteId) return n;
       const blocks = n.blocks.filter(b => b.id !== blockId);
       blocks.forEach((b, i) => (b.order = i));
@@ -630,7 +663,7 @@ function MainAppContent() {
   const changeCoverStyle = (style: CoverStyle) => {
     if (!activeNoteId) return;
     const now = new Date().toISOString();
-    const next = notes.map(n => (n.id === activeNoteId ? { ...n, coverStyle: style, updatedAt: now } : n));
+    const next = allNotes.map(n => (n.id === activeNoteId ? { ...n, coverStyle: style, updatedAt: now } : n));
     persistNotes(next);
   };
 
@@ -641,11 +674,12 @@ function MainAppContent() {
       supabaseAnonKey: supabaseAnonKey.trim(),
       enabled: true
     };
+    setCloudConfig(config);
     await storage.saveCloudConfig(config);
     const success = await syncManager.initializeWithConfig(config);
     if (success) {
       const synced = await syncManager.sync();
-      setNotes(synced);
+      setAllNotes(synced);
       Alert.alert('Connected', 'Synced seamlessly with Supabase PostgreSQL!');
       setIsCloudOpen(false);
     } else {
@@ -1533,17 +1567,21 @@ function MainAppContent() {
 
               <View style={[styles.menuDivider, { backgroundColor: colors.border, marginVertical: 14 }]} />
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Feather name="shield" size={15} color={colors.textMain} />
                   <Text style={[styles.subSectionTitle, { color: colors.textMain, marginBottom: 0 }]}>
                     3-DIGIT PAGE SECURITY PIN
                   </Text>
                 </View>
-                <Text style={{ fontSize: 12, color: colors.textMuted }}>Current: {securityPin}</Text>
+                <Text style={{ fontSize: 12, color: colors.textMuted }}>Status: Configured (•••)</Text>
               </View>
 
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 10 }}>
+                Enter current PIN to authenticate, then specify your new 3-digit PIN.
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
                 <TextInput
                   style={[
                     styles.cloudInput,
@@ -1557,7 +1595,28 @@ function MainAppContent() {
                       fontSize: 16
                     }
                   ]}
-                  placeholder="New 3-digit PIN"
+                  placeholder="Current"
+                  placeholderTextColor={colors.textMuted}
+                  value={currentPinChangeInput}
+                  onChangeText={txt => setCurrentPinChangeInput(txt.replace(/\D/g, '').slice(0, 3))}
+                  keyboardType="numeric"
+                  maxLength={3}
+                  secureTextEntry
+                />
+                <TextInput
+                  style={[
+                    styles.cloudInput,
+                    {
+                      flex: 1,
+                      backgroundColor: colors.bgApp,
+                      color: colors.textMain,
+                      borderColor: colors.border,
+                      letterSpacing: 8,
+                      textAlign: 'center',
+                      fontSize: 16
+                    }
+                  ]}
+                  placeholder="New PIN"
                   placeholderTextColor={colors.textMuted}
                   value={newPinInput}
                   onChangeText={txt => setNewPinInput(txt.replace(/\D/g, '').slice(0, 3))}
@@ -1565,22 +1624,24 @@ function MainAppContent() {
                   maxLength={3}
                   secureTextEntry
                 />
-                <TouchableOpacity
-                  style={[
-                    styles.cloudSaveBtn,
-                    {
-                      backgroundColor: colors.bgSubtle,
-                      borderColor: colors.border,
-                      borderWidth: 1,
-                      marginTop: 0,
-                      paddingHorizontal: 16
-                    }
-                  ]}
-                  onPress={saveCustomPin}
-                >
-                  <Text style={{ color: colors.textMain, fontWeight: '600' }}>Save PIN</Text>
-                </TouchableOpacity>
               </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.cloudSaveBtn,
+                  {
+                    backgroundColor: colors.bgSubtle,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                    marginTop: 0,
+                    paddingHorizontal: 16,
+                    alignItems: 'center'
+                  }
+                ]}
+                onPress={saveCustomPin}
+              >
+                <Text style={{ color: colors.textMain, fontWeight: '600' }}>Update Security PIN</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
